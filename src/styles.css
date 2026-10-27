@@ -851,6 +851,7 @@ h1 em {
   cursor: grab;
   opacity: 0.3;
   transform: translateY(-50%);
+  -webkit-user-drag: element;
   transition: opacity 130ms ease, background 130ms ease, color 130ms ease;
 }
 
