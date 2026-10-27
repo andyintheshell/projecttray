@@ -1,0 +1,23 @@
+[package]
+name = "projecttray"
+version = "0.1.0"
+description = "A tray-first project dashboard for macOS"
+authors = ["ProjectTray"]
+edition = "2021"
+
+[lib]
+name = "projecttray_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSApplication", "NSResponder"] }
+
+[profile.dev]
+incremental = true
