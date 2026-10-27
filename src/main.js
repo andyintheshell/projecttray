@@ -19,7 +19,9 @@ const WEEK_LABELS = ["M", "T", "W", "T", "F", "S", "S"];
 const ICONS = {
   check: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="m2.4 6.25 2.3 2.25 4.9-5"/></svg>',
   close: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="m3 3 6 6M9 3 3 9"/></svg>',
-  calendar: '<svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2.6" width="8" height="7.2" rx="1.5"/><path d="M2.3 4.8h7.4M4.2 1.8v1.6M7.8 1.8v1.6"/></svg>',
+  calendar: '<svg class="calendar-icon" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2.6" width="8" height="7.2" rx="1.5"/><path d="M2.3 4.8h7.4M4.2 1.8v1.6M7.8 1.8v1.6"/></svg>',
+  clock: '<svg class="clock-icon" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.4"/><path d="M6 3.5V6l1.8 1.1"/></svg>',
+  grip: '<svg class="grip-icon" viewBox="0 0 6 14" aria-hidden="true"><circle cx="1.5" cy="2" r="1.1"/><circle cx="4.5" cy="2" r="1.1"/><circle cx="1.5" cy="7" r="1.1"/><circle cx="4.5" cy="7" r="1.1"/><circle cx="1.5" cy="12" r="1.1"/><circle cx="4.5" cy="12" r="1.1"/></svg>',
   dots: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="13" cy="8" r="1.1"/></svg>',
   plus: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 2v8M2 6h8"/></svg>',
   chevronLeft: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="m7.5 2.5-3.5 3.5 3.5 3.5"/></svg>',
@@ -55,6 +57,8 @@ let hiding = false;
 let toastTimer = null;
 let toastUndo = null;
 let currentDayKey = todayKey();
+let draggedTodo = null;
+let todoDropTarget = null;
 
 /* -------------------------------------------------------------------------- */
 /* Helpers                                                                    */
@@ -185,14 +189,34 @@ function toggleTheme() {
   void applyTheme(next, { persist: true });
 }
 
-function dueInfo(key) {
+function normalizeDateMode(value) {
+  return value === "waiting" ? "waiting" : "deadline";
+}
+
+function dueInfo(key, mode = "deadline") {
+  const waiting = Boolean(key) && normalizeDateMode(mode) === "waiting";
+
   if (!key) {
-    return { label: "Date", className: "is-none", title: "Set a due date" };
+    return {
+      label: "Date",
+      className: "is-none",
+      title: "Set a due date",
+      ariaLabel: "Set a due date",
+      icon: ICONS.calendar,
+      waiting: false,
+    };
   }
 
   const date = fromKey(key);
   if (!date) {
-    return { label: "Date", className: "is-none", title: "Set a due date" };
+    return {
+      label: "Date",
+      className: "is-none",
+      title: "Set a due date",
+      ariaLabel: "Set a due date",
+      icon: ICONS.calendar,
+      waiting: false,
+    };
   }
 
   const diff = dayDiff(key);
@@ -200,11 +224,11 @@ function dueInfo(key) {
   let className = "";
 
   if (diff < -1) {
-    label = `${Math.abs(diff)}d late`;
-    className = "is-overdue";
+    label = waiting ? `${Math.abs(diff)}d ago` : `${Math.abs(diff)}d late`;
+    className = waiting ? "" : "is-overdue";
   } else if (diff === -1) {
     label = "Yesterday";
-    className = "is-overdue";
+    className = waiting ? "" : "is-overdue";
   } else if (diff === 0) {
     label = "Today";
     className = "is-today";
@@ -219,7 +243,16 @@ function dueInfo(key) {
     }
   }
 
-  return { label, className, title: fullDate(key) };
+  const classes = [className, waiting ? "is-waiting" : ""].filter(Boolean).join(" ");
+  const dateLabel = fullDate(key);
+  return {
+    label,
+    className: classes,
+    title: waiting ? `Waiting until ${dateLabel}` : `Deadline: ${dateLabel}`,
+    ariaLabel: waiting ? `Waiting until ${dateLabel}` : `Deadline: ${dateLabel}`,
+    icon: waiting ? ICONS.clock : ICONS.calendar,
+    waiting,
+  };
 }
 
 function clone(value) {
@@ -287,7 +320,7 @@ function makeSeedState() {
         color: PALETTE[1],
         todos: [
           { id: uid(), title: "Measure the desk nook", due: day(-1), completed: false },
-          { id: uid(), title: "Order the monitor arm", due: day(2), completed: false },
+          { id: uid(), title: "Order the monitor arm", due: day(2), dueMode: "waiting", completed: false },
           { id: uid(), title: "Clear out the cable drawer", due: day(9), completed: false },
         ],
       },
@@ -314,6 +347,7 @@ function normalizeState(raw) {
             id: typeof todo.id === "string" && todo.id ? todo.id : uid(),
             title: typeof todo.title === "string" ? todo.title : "Untitled task",
             due: isDateKey(todo.due) ? todo.due : null,
+            dueMode: normalizeDateMode(todo.dueMode),
             completed: Boolean(todo.completed),
           })),
       };
@@ -495,15 +529,12 @@ function renderGrid() {
 }
 
 function renderProject(project) {
-  const sortedTodos = [...project.todos].sort(
-    (left, right) => Number(left.completed) - Number(right.completed),
-  );
   const done = project.todos.filter((todo) => todo.completed).length;
   const total = project.todos.length;
   const percent = total === 0 ? 0 : Math.round((done / total) * 100);
   const countLabel = total === 0 ? "No actions yet" : `${done} / ${total} done`;
 
-  const todoMarkup = sortedTodos.map((todo) => renderTodo(project, todo)).join("");
+  const todoMarkup = project.todos.map((todo) => renderTodo(project, todo)).join("");
 
   return `
     <article class="project-card" style="--accent:${escapeHtml(project.color)}" data-project-card="${escapeHtml(project.id)}">
@@ -552,9 +583,16 @@ function renderProject(project) {
 }
 
 function renderTodo(project, todo) {
-  const info = dueInfo(todo.due);
+  const info = dueInfo(todo.due, todo.dueMode);
+  const rowClasses = [
+    "todo-row",
+    todo.completed ? "is-done" : "",
+    info.waiting ? "is-waiting" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return `
-    <div class="todo-row ${todo.completed ? "is-done" : ""}">
+    <div class="${rowClasses}" data-project-id="${escapeHtml(project.id)}" data-todo-id="${escapeHtml(todo.id)}">
       <button
         class="check"
         type="button"
@@ -591,10 +629,21 @@ function renderTodo(project, todo) {
         data-action="pick-date"
         data-project-id="${escapeHtml(project.id)}"
         data-todo-id="${escapeHtml(todo.id)}"
+        data-due-mode="${normalizeDateMode(todo.dueMode)}"
         data-popover-anchor
         title="${escapeHtml(info.title)}"
-        aria-label="Due date: ${escapeHtml(info.title)}"
-      >${ICONS.calendar}<span>${escapeHtml(info.label)}</span></button>
+        aria-label="${escapeHtml(info.ariaLabel)}"
+      >${info.icon}<span>${escapeHtml(info.label)}</span></button>
+
+      <button
+        class="drag-handle"
+        type="button"
+        draggable="true"
+        data-project-id="${escapeHtml(project.id)}"
+        data-todo-id="${escapeHtml(todo.id)}"
+        title="Drag to reorder. Use ↑ or ↓ to move."
+        aria-label="Reorder ${escapeHtml(todo.title || "Untitled task")}"
+      >${ICONS.grip}</button>
     </div>`;
 }
 
@@ -608,6 +657,28 @@ function resizeTodoTitles() {
   for (const element of dom.grid.querySelectorAll(".todo-title")) {
     resizeTodoTitle(element);
   }
+}
+
+function updateTodoRowAppearance(projectId, todoId) {
+  const { todo } = findTodo(projectId, todoId);
+  if (!todo) return;
+
+  const row = dom.grid.querySelector(
+    `.todo-row[data-project-id="${cssEscape(projectId)}"][data-todo-id="${cssEscape(todoId)}"]`,
+  );
+  if (!row) return;
+
+  const info = dueInfo(todo.due, todo.dueMode);
+  row.classList.toggle("is-waiting", info.waiting);
+
+  const chip = row.querySelector(".due-chip");
+  if (!chip) return;
+
+  chip.className = `due-chip ${info.className}`;
+  chip.dataset.dueMode = normalizeDateMode(todo.dueMode);
+  chip.title = info.title;
+  chip.setAttribute("aria-label", info.ariaLabel);
+  chip.innerHTML = `${info.icon}<span>${escapeHtml(info.label)}</span>`;
 }
 
 function applyPendingFocus() {
@@ -628,6 +699,10 @@ function applyPendingFocus() {
     } else if (request.kind === "todo-title") {
       element = dom.grid.querySelector(
         `.todo-title[data-todo-id="${cssEscape(request.todoId)}"]`,
+      );
+    } else if (request.kind === "drag-handle") {
+      element = dom.grid.querySelector(
+        `.drag-handle[data-todo-id="${cssEscape(request.todoId)}"]`,
       );
     }
 
@@ -670,6 +745,7 @@ function addTodo(projectId, title) {
     id: uid(),
     title: cleanTitle,
     due: null,
+    dueMode: "deadline",
     completed: false,
   });
 
@@ -746,12 +822,63 @@ function clearCompleted(projectId) {
   });
 }
 
-function setTodoDue(projectId, todoId, due) {
+function setTodoDue(projectId, todoId, due, dueMode) {
   const { todo } = findTodo(projectId, todoId);
   if (!todo) return;
 
   todo.due = due;
+  todo.dueMode = normalizeDateMode(dueMode ?? todo.dueMode);
   closePopover();
+  markChanged();
+  renderAll();
+  void saveNow();
+}
+
+function setTodoMode(projectId, todoId, mode) {
+  const { todo } = findTodo(projectId, todoId);
+  if (!todo) return;
+
+  todo.dueMode = normalizeDateMode(mode);
+  markChanged();
+  updateTodoRowAppearance(projectId, todoId);
+}
+
+function reorderTodo(projectId, todoId, targetTodoId, after) {
+  const project = findProject(projectId);
+  if (!project || targetTodoId === todoId) return;
+
+  const from = project.todos.findIndex((todo) => todo.id === todoId);
+  if (from < 0) return;
+
+  const [todo] = project.todos.splice(from, 1);
+  if (targetTodoId === null) {
+    project.todos.push(todo);
+  } else {
+    let targetIndex = project.todos.findIndex((item) => item.id === targetTodoId);
+    if (targetIndex < 0) {
+      project.todos.splice(from, 0, todo);
+      return;
+    }
+    if (after) targetIndex += 1;
+    project.todos.splice(targetIndex, 0, todo);
+  }
+
+  markChanged();
+  renderAll();
+  void saveNow();
+}
+
+function moveTodoBy(projectId, todoId, delta) {
+  const project = findProject(projectId);
+  if (!project) return;
+
+  const index = project.todos.findIndex((todo) => todo.id === todoId);
+  const nextIndex = index + delta;
+  if (index < 0 || nextIndex < 0 || nextIndex >= project.todos.length) return;
+
+  const [todo] = project.todos.splice(index, 1);
+  project.todos.splice(nextIndex, 0, todo);
+  pendingFocus = { kind: "drag-handle", todoId };
   markChanged();
   renderAll();
   void saveNow();
@@ -848,6 +975,7 @@ function openDatePicker(projectId, todoId, anchor) {
     todoId,
     anchor,
     selected: todo.due,
+    mode: normalizeDateMode(todo.dueMode),
   };
   calendarCursor = todo.due ? fromKey(todo.due) : new Date();
   renderDatePopover();
@@ -857,6 +985,7 @@ function renderDatePopover() {
   if (!activePopover || activePopover.type !== "date") return;
 
   const { anchor, selected } = activePopover;
+  const mode = normalizeDateMode(activePopover.mode);
   const year = calendarCursor.getFullYear();
   const month = calendarCursor.getMonth();
   const firstOfMonth = new Date(year, month, 1, 12);
@@ -882,6 +1011,15 @@ function renderDatePopover() {
   const element = document.createElement("div");
   element.className = "popover date-popover";
   element.innerHTML = `
+    <div class="date-mode" role="group" aria-label="Date type">
+      <button class="date-mode-btn ${mode === "deadline" ? "is-active" : ""}" type="button" data-date-mode="deadline" aria-pressed="${mode === "deadline"}">
+        ${ICONS.calendar}<span>Deadline</span>
+      </button>
+      <button class="date-mode-btn ${mode === "waiting" ? "is-active" : ""}" type="button" data-date-mode="waiting" aria-pressed="${mode === "waiting"}">
+        ${ICONS.clock}<span>Waiting</span>
+      </button>
+    </div>
+    <p class="date-mode-hint">${mode === "waiting" ? "Waiting until this date." : "Finish by this date."}</p>
     <div class="calendar-head">
       <span class="calendar-title">${escapeHtml(monthLabel(calendarCursor))}</span>
       <div class="calendar-nav">
@@ -904,6 +1042,17 @@ function renderDatePopover() {
 }
 
 function handlePopoverClick(event) {
+  const modeButton = event.target.closest("[data-date-mode]");
+  if (modeButton && activePopover?.type === "date") {
+    activePopover.mode = normalizeDateMode(modeButton.dataset.dateMode);
+    setTodoMode(activePopover.projectId, activePopover.todoId, activePopover.mode);
+    renderDatePopover();
+    dom.popoverLayer
+      .querySelector(`[data-date-mode="${activePopover.mode}"]`)
+      ?.focus({ preventScroll: true });
+    return;
+  }
+
   const nav = event.target.closest("[data-calendar-nav]");
   if (nav && activePopover?.type === "date") {
     calendarCursor = new Date(
@@ -918,19 +1067,24 @@ function handlePopoverClick(event) {
 
   const dateButton = event.target.closest("[data-calendar-date]");
   if (dateButton && activePopover?.type === "date") {
-    setTodoDue(activePopover.projectId, activePopover.todoId, dateButton.dataset.calendarDate);
+    setTodoDue(
+      activePopover.projectId,
+      activePopover.todoId,
+      dateButton.dataset.calendarDate,
+      activePopover.mode,
+    );
     return;
   }
 
   const quick = event.target.closest("[data-calendar-quick]");
   if (quick && activePopover?.type === "date") {
-    const { projectId, todoId } = activePopover;
+    const { projectId, todoId, mode } = activePopover;
     if (quick.dataset.calendarQuick === "today") {
-      setTodoDue(projectId, todoId, todayKey());
+      setTodoDue(projectId, todoId, todayKey(), mode);
     } else if (quick.dataset.calendarQuick === "tomorrow") {
-      setTodoDue(projectId, todoId, toKey(addDays(new Date(), 1)));
+      setTodoDue(projectId, todoId, toKey(addDays(new Date(), 1)), mode);
     } else {
-      setTodoDue(projectId, todoId, null);
+      setTodoDue(projectId, todoId, null, mode);
     }
     return;
   }
@@ -955,6 +1109,107 @@ function handlePopoverClick(event) {
       clearCompleted(projectId);
     }
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Task reordering                                                            */
+/* -------------------------------------------------------------------------- */
+
+function clearTodoDropHints() {
+  for (const element of dom.grid.querySelectorAll(
+    ".is-drop-before, .is-drop-after, .is-drop-end",
+  )) {
+    element.classList.remove("is-drop-before", "is-drop-after", "is-drop-end");
+  }
+}
+
+function clearTodoDragState() {
+  if (draggedTodo) {
+    const row = dom.grid.querySelector(
+      `.todo-row[data-todo-id="${cssEscape(draggedTodo.todoId)}"]`,
+    );
+    row?.classList.remove("is-dragging");
+  }
+  draggedTodo = null;
+  todoDropTarget = null;
+  clearTodoDropHints();
+}
+
+function handleTodoDragStart(event) {
+  const handle = event.target.closest(".drag-handle");
+  if (!handle) return;
+
+  const row = handle.closest(".todo-row");
+  if (!row) return;
+
+  draggedTodo = {
+    projectId: row.dataset.projectId,
+    todoId: row.dataset.todoId,
+  };
+
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", row.dataset.todoId);
+    if (typeof event.dataTransfer.setDragImage === "function") {
+      try {
+        event.dataTransfer.setDragImage(row, 24, row.offsetHeight / 2);
+      } catch {
+        // Synthetic drag events cannot always set a drag image.
+      }
+    }
+  }
+
+  requestAnimationFrame(() => row.classList.add("is-dragging"));
+}
+
+function handleTodoDragOver(event) {
+  if (!draggedTodo) return;
+
+  const list = event.target.closest(".todo-list");
+  if (!list || list.dataset.projectId !== draggedTodo.projectId) return;
+
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  clearTodoDropHints();
+
+  const row = event.target.closest(".todo-row");
+  if (!row) {
+    todoDropTarget = { todoId: null, after: true };
+    list.classList.add("is-drop-end");
+    return;
+  }
+
+  if (row.dataset.todoId === draggedTodo.todoId) {
+    todoDropTarget = null;
+    return;
+  }
+
+  const rect = row.getBoundingClientRect();
+  const after = event.clientY >= rect.top + rect.height / 2;
+  row.classList.add(after ? "is-drop-after" : "is-drop-before");
+  todoDropTarget = { todoId: row.dataset.todoId, after };
+}
+
+function handleTodoDrop(event) {
+  if (!draggedTodo) return;
+
+  const list = event.target.closest(".todo-list");
+  if (!list || list.dataset.projectId !== draggedTodo.projectId) return;
+
+  event.preventDefault();
+  if (todoDropTarget) {
+    reorderTodo(
+      draggedTodo.projectId,
+      draggedTodo.todoId,
+      todoDropTarget.todoId,
+      todoDropTarget.after,
+    );
+  }
+  clearTodoDragState();
+}
+
+function handleTodoDragEnd() {
+  clearTodoDragState();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1071,6 +1326,17 @@ function handleGridInput(event) {
 
 function handleGridKeydown(event) {
   const element = event.target;
+  const dragHandle = element.closest?.(".drag-handle");
+  if (dragHandle && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+    event.preventDefault();
+    moveTodoBy(
+      dragHandle.dataset.projectId,
+      dragHandle.dataset.todoId,
+      event.key === "ArrowUp" ? -1 : 1,
+    );
+    return;
+  }
+
   if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) return;
 
   if (event.key === "Enter") {
@@ -1161,6 +1427,10 @@ function bindEvents() {
   dom.grid.addEventListener("input", handleGridInput);
   dom.grid.addEventListener("keydown", handleGridKeydown);
   dom.grid.addEventListener("focusout", handleGridFocusOut);
+  dom.grid.addEventListener("dragstart", handleTodoDragStart);
+  dom.grid.addEventListener("dragover", handleTodoDragOver);
+  dom.grid.addEventListener("drop", handleTodoDrop);
+  dom.grid.addEventListener("dragend", handleTodoDragEnd);
   dom.grid.addEventListener(
     "scroll",
     () => {
