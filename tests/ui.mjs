@@ -799,13 +799,16 @@ try {
   state = await snapshot();
   check("new project card added", state.cards === 5, JSON.stringify(state));
 
-  const focusInfo = await cdp.evaluate(`(() => {
-    const element = document.activeElement;
-    return {
-      cls: element?.className,
-      selected: element?.selectionStart === 0 && element?.selectionEnd === element?.value.length,
-    };
-  })()`);
+  const focusInfo = await waitFor(async () => {
+    const info = await cdp.evaluate(`(() => {
+      const element = document.activeElement;
+      return {
+        cls: element?.className,
+        selected: element?.selectionStart === 0 && element?.selectionEnd === element?.value.length,
+      };
+    })()`);
+    return info.cls?.includes("project-title") && info.selected ? info : false;
+  }, "new project title focus");
   check(
     "new project title focused and selected",
     focusInfo.cls?.includes("project-title") && focusInfo.selected,
