@@ -290,6 +290,7 @@ try {
       tag: title.tagName,
       rows: title.rows,
       wrap: title.wrap,
+      cardWidth: cardRect.width,
       titleWidth: titleRect.width,
       chipRightGap: cardRect.right - chipRect.right,
       checkCenterOffset: Math.abs(
@@ -310,8 +311,8 @@ try {
   );
   check(
     "task title uses expanded card width",
-    layout.titleWidth > 185,
-    `${layout.titleWidth}px`,
+    layout.titleWidth > 180 && layout.titleWidth / layout.cardWidth > 0.55,
+    `${layout.titleWidth}px of ${layout.cardWidth}px`,
   );
   check(
     "checkmark is vertically centered",
