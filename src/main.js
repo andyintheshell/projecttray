@@ -490,6 +490,7 @@ function renderGrid() {
     if (typeof previous === "number") list.scrollTop = previous;
   }
 
+  resizeTodoTitles();
   applyPendingFocus();
 }
 
@@ -563,17 +564,26 @@ function renderTodo(project, todo) {
         aria-label="${todo.completed ? "Mark as open" : "Mark as done"}: ${escapeHtml(todo.title || "Untitled task")}"
       >${ICONS.check}</button>
 
-      <input
+      <textarea
         class="todo-title"
-        type="text"
-        value="${escapeHtml(todo.title)}"
+        rows="1"
+        wrap="soft"
         data-project-id="${escapeHtml(project.id)}"
         data-todo-id="${escapeHtml(todo.id)}"
         aria-label="Task name"
         placeholder="Untitled task"
         spellcheck="false"
         autocomplete="off"
-      />
+      >${escapeHtml(todo.title)}</textarea>
+
+      <button
+        class="delete-todo"
+        type="button"
+        data-action="delete-todo"
+        data-project-id="${escapeHtml(project.id)}"
+        data-todo-id="${escapeHtml(todo.id)}"
+        aria-label="Delete task"
+      >${ICONS.close}</button>
 
       <button
         class="due-chip ${info.className}"
@@ -585,16 +595,19 @@ function renderTodo(project, todo) {
         title="${escapeHtml(info.title)}"
         aria-label="Due date: ${escapeHtml(info.title)}"
       >${ICONS.calendar}<span>${escapeHtml(info.label)}</span></button>
-
-      <button
-        class="delete-todo"
-        type="button"
-        data-action="delete-todo"
-        data-project-id="${escapeHtml(project.id)}"
-        data-todo-id="${escapeHtml(todo.id)}"
-        aria-label="Delete task"
-      >${ICONS.close}</button>
     </div>`;
+}
+
+function resizeTodoTitle(element) {
+  if (!(element instanceof HTMLTextAreaElement)) return;
+  element.style.height = "auto";
+  element.style.height = `${Math.max(22, element.scrollHeight)}px`;
+}
+
+function resizeTodoTitles() {
+  for (const element of dom.grid.querySelectorAll(".todo-title")) {
+    resizeTodoTitle(element);
+  }
 }
 
 function applyPendingFocus() {
@@ -1036,6 +1049,16 @@ function handleGridClick(event) {
 
 function handleGridInput(event) {
   const element = event.target;
+
+  if (element instanceof HTMLTextAreaElement && element.classList.contains("todo-title")) {
+    const { todo } = findTodo(element.dataset.projectId, element.dataset.todoId);
+    if (!todo) return;
+    todo.title = element.value;
+    resizeTodoTitle(element);
+    markChanged();
+    return;
+  }
+
   if (!(element instanceof HTMLInputElement)) return;
 
   if (element.classList.contains("project-title")) {
@@ -1043,20 +1066,12 @@ function handleGridInput(event) {
     if (!project) return;
     project.title = element.value;
     markChanged();
-    return;
-  }
-
-  if (element.classList.contains("todo-title")) {
-    const { todo } = findTodo(element.dataset.projectId, element.dataset.todoId);
-    if (!todo) return;
-    todo.title = element.value;
-    markChanged();
   }
 }
 
 function handleGridKeydown(event) {
   const element = event.target;
-  if (!(element instanceof HTMLInputElement)) return;
+  if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) return;
 
   if (event.key === "Enter") {
     if (element.classList.contains("add-todo")) {
@@ -1077,7 +1092,7 @@ function handleGridKeydown(event) {
 
 function handleGridFocusOut(event) {
   const element = event.target;
-  if (!(element instanceof HTMLInputElement)) return;
+  if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) return;
 
   if (element.classList.contains("project-title") && !element.value.trim()) {
     element.value = "Untitled project";
@@ -1087,11 +1102,14 @@ function handleGridFocusOut(event) {
     return;
   }
 
-  if (element.classList.contains("todo-title") && !element.value.trim()) {
-    element.value = "Untitled task";
-    const { todo } = findTodo(element.dataset.projectId, element.dataset.todoId);
-    if (todo) todo.title = "Untitled task";
-    markChanged();
+  if (element.classList.contains("todo-title")) {
+    if (!element.value.trim()) {
+      element.value = "Untitled task";
+      const { todo } = findTodo(element.dataset.projectId, element.dataset.todoId);
+      if (todo) todo.title = "Untitled task";
+      markChanged();
+    }
+    resizeTodoTitle(element);
   }
 }
 
@@ -1174,6 +1192,7 @@ function bindEvents() {
   window.addEventListener("focus", updateToday);
   window.addEventListener("resize", () => {
     if (activePopover) closePopover();
+    resizeTodoTitles();
   });
 
   if (TAURI?.event?.listen) {
