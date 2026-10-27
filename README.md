@@ -23,6 +23,8 @@ fullscreen app — so the next actions are always one click away.
 - Dark and light themes, switchable with the sun/moon button in the header.
   The choice is saved with the rest of the state.
 - Square project cards with editable names, card colors, and inline task lists.
+- Long task names wrap onto multiple lines instead of being clipped, while due
+  dates stay aligned to the card edge.
 - Tasks can be completed, renamed, deleted, and given a due date with a custom
   calendar picker.
 - Add projects and next actions without leaving the overlay.
@@ -60,6 +62,20 @@ npm run build
 ```
 
 The `.app` and `.dmg` are written under `src-tauri/target/release/bundle/`.
+
+## Testing
+
+```bash
+npm test
+```
+
+The regression suite drives the UI in headless Chrome through the Chrome
+DevTools Protocol. It covers task-row layout (wrapping titles, checkmark
+centering, due-date placement), project and task CRUD, undo, the date picker,
+theme switching, and persistence. It starts its own static server and browser on
+ephemeral ports and uses an isolated browser profile, so it does not touch the
+app's saved state. Chrome is expected at the standard macOS location; set
+`CHROME_PATH` to use another Chromium-based browser.
 
 ## Where the data lives
 

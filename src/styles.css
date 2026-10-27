@@ -38,7 +38,8 @@ body {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -46,7 +47,8 @@ button {
   color: inherit;
 }
 
-input {
+input,
+textarea {
   user-select: text;
   -webkit-user-select: text;
 }
@@ -63,7 +65,7 @@ input {
   inset: 0;
   display: grid;
   place-items: center;
-  padding: 36px;
+  padding: 28px;
   background:
     radial-gradient(90% 72% at 50% 35%, rgba(12, 14, 21, 0.20), rgba(3, 4, 7, 0.48)),
     rgba(4, 5, 8, 0.22);
@@ -79,11 +81,11 @@ input {
 
 .panel {
   position: relative;
-  width: min(1360px, calc(100vw - 96px));
-  max-height: calc(100vh - 72px);
+  width: min(1480px, calc(100vw - 56px));
+  max-height: calc(100vh - 56px);
   display: flex;
   flex-direction: column;
-  padding: 27px 32px 20px;
+  padding: 25px 26px 18px;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.095);
   border-radius: 28px;
@@ -438,7 +440,7 @@ h1 em {
   flex-direction: column;
   min-width: 0;
   min-height: 382px;
-  padding: 17px 17px 15px;
+  padding: 15px 13px 13px;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.075);
   border-radius: 19px;
@@ -585,8 +587,8 @@ h1 em {
   flex-direction: column;
   gap: 1px;
   min-height: 82px;
-  margin: 12px -4px 0;
-  padding: 0 4px;
+  margin: 12px -7px 0;
+  padding: 0 7px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -602,11 +604,11 @@ h1 em {
 
 .todo-row {
   display: grid;
-  grid-template-columns: 17px minmax(0, 1fr) auto 16px;
+  grid-template-columns: 17px minmax(0, 1fr) 14px auto;
   align-items: center;
-  gap: 7px;
-  min-height: 31px;
-  padding: 4px 4px;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 2px;
   border-radius: 7px;
   transition: background 130ms ease;
 }
@@ -617,6 +619,7 @@ h1 em {
   position: relative;
   display: grid;
   place-items: center;
+  align-self: center;
   width: 15px;
   height: 15px;
   padding: 0;
@@ -658,8 +661,10 @@ h1 em {
 }
 
 .todo-title {
+  display: block;
   width: 100%;
   min-width: 0;
+  min-height: 22px;
   height: 22px;
   padding: 1px 3px;
   border: 0;
@@ -671,7 +676,9 @@ h1 em {
   font-weight: 450;
   letter-spacing: -0.005em;
   outline: none;
-  text-overflow: ellipsis;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  resize: none;
   transition: background 130ms ease, color 130ms ease;
 }
 
@@ -693,6 +700,7 @@ h1 em {
 .due-chip {
   display: inline-flex;
   align-items: center;
+  justify-self: end;
   gap: 4px;
   height: 19px;
   max-width: 84px;
@@ -749,8 +757,9 @@ h1 em {
 .delete-todo {
   display: grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
+  align-self: center;
+  width: 14px;
+  height: 14px;
   padding: 0;
   border: 0;
   border-radius: 4px;
@@ -1219,7 +1228,8 @@ kbd {
 /* ---------- Focus / motion ---------- */
 
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+textarea:focus-visible {
   outline: 1px solid color-mix(in srgb, var(--accent, var(--amber)) 70%, white 15%);
   outline-offset: 2px;
 }
@@ -1413,13 +1423,14 @@ input:focus-visible {
 [data-theme="light"] .toast-action:hover { background: rgba(28, 30, 38, 0.12); }
 
 [data-theme="light"] button:focus-visible,
-[data-theme="light"] input:focus-visible {
+[data-theme="light"] input:focus-visible,
+[data-theme="light"] textarea:focus-visible {
   outline-color: color-mix(in srgb, var(--accent, var(--amber)) 75%, black 10%);
 }
 
 @media (max-width: 1180px) {
   .project-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .panel { width: calc(100vw - 72px); }
+  .panel { width: calc(100vw - 56px); }
 }
 
 @media (max-width: 860px) {
