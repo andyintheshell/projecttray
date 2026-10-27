@@ -25,7 +25,13 @@ fullscreen app — so the next actions are always one click away.
 - Square project cards with editable names, card colors, and inline task lists.
 - Long task names wrap onto multiple lines instead of being clipped, while due
   dates stay aligned to the card edge.
-- Tasks can be completed, renamed, deleted, and given a due date with a custom
+- Drag the grip beside a task's date to reorder it, or focus the grip and press
+  `↑` / `↓` to move it with the keyboard. Completed tasks stay where you put
+  them instead of jumping to the bottom.
+- Dates can be deadlines or waiting dates. The picker has a **Deadline** /
+  **Waiting** switch with a short hint, and waiting tasks get a clock icon, a
+  subdued row, and a tinted date chip so the date itself stays readable.
+- Tasks can be completed, renamed, deleted, and given a date with a custom
   calendar picker.
 - Add projects and next actions without leaving the overlay.
 - Project menus support recoloring, clearing completed tasks, and deleting with
@@ -71,11 +77,12 @@ npm test
 
 The regression suite drives the UI in headless Chrome through the Chrome
 DevTools Protocol. It covers task-row layout (wrapping titles, checkmark
-centering, due-date placement), project and task CRUD, undo, the date picker,
-theme switching, and persistence. It starts its own static server and browser on
-ephemeral ports and uses an isolated browser profile, so it does not touch the
-app's saved state. Chrome is expected at the standard macOS location; set
-`CHROME_PATH` to use another Chromium-based browser.
+centering, due-date placement), pointer and keyboard reordering, deadline vs.
+waiting dates, project and task CRUD, undo, the date picker, theme switching,
+and persistence. It starts its own static server and browser on ephemeral ports
+and uses an isolated browser profile, so it does not touch the app's saved
+state. Chrome is expected at the standard macOS location; set `CHROME_PATH` to
+use another Chromium-based browser.
 
 ## Where the data lives
 
@@ -109,6 +116,7 @@ tray/fullscreen plumbing native.
 ## Known prototype limitations
 
 - No global keyboard shortcut yet; the tray icon is the entry point.
-- No drag-to-reorder, notifications, or sync.
+- Tasks can be reordered within a project, but not dragged between projects.
+- No notifications or sync yet.
 - The build is unsigned and not notarized.
 - Menu bar behavior is macOS-only by design.

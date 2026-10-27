@@ -587,8 +587,8 @@ h1 em {
   flex-direction: column;
   gap: 1px;
   min-height: 82px;
-  margin: 12px -7px 0;
-  padding: 0 7px;
+  margin: 12px -11px 0 -7px;
+  padding: 0 11px 0 7px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -603,6 +603,7 @@ h1 em {
 }
 
 .todo-row {
+  position: relative;
   display: grid;
   grid-template-columns: 17px minmax(0, 1fr) 14px auto;
   align-items: center;
@@ -610,10 +611,47 @@ h1 em {
   min-height: 32px;
   padding: 4px 2px;
   border-radius: 7px;
-  transition: background 130ms ease;
+  transition: background 130ms ease, opacity 130ms ease;
 }
 
 .todo-row:hover { background: rgba(255, 255, 255, 0.034); }
+
+.todo-row.is-dragging {
+  opacity: 0.38;
+}
+
+.todo-row.is-drop-before::before,
+.todo-row.is-drop-after::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: -8px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--accent) 45%, transparent);
+  pointer-events: none;
+}
+
+.todo-row.is-drop-before::before { top: -2px; }
+.todo-row.is-drop-after::after { bottom: -2px; }
+
+.todo-list.is-drop-end::after {
+  content: "";
+  flex: 0 0 auto;
+  height: 2px;
+  margin: 2px 4px 0;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* Waiting tasks read as parked: the row recedes, but the date stays legible. */
+.todo-row.is-waiting:not(.is-done) .todo-title { color: var(--muted); }
+
+.todo-row.is-waiting:not(.is-done) .check {
+  border-color: rgba(255, 255, 255, 0.16);
+}
 
 .check {
   position: relative;
@@ -754,6 +792,16 @@ h1 em {
 .todo-row:hover .due-chip.is-none,
 .due-chip.is-none:hover { opacity: 1; }
 
+.due-chip.is-waiting:not(.is-today) {
+  background: rgba(165, 227, 232, 0.08);
+  color: #a9d5d8;
+}
+
+.due-chip.is-waiting:not(.is-today):hover {
+  background: rgba(165, 227, 232, 0.13);
+  color: #c3e7e9;
+}
+
 .delete-todo {
   display: grid;
   place-items: center;
@@ -786,6 +834,44 @@ h1 em {
   background: rgba(255, 131, 121, 0.12);
   color: var(--danger);
 }
+
+.drag-handle {
+  position: absolute;
+  top: 50%;
+  right: -11px;
+  display: grid;
+  place-items: center;
+  width: 11px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted-2);
+  cursor: grab;
+  opacity: 0.3;
+  transform: translateY(-50%);
+  transition: opacity 130ms ease, background 130ms ease, color 130ms ease;
+}
+
+.drag-handle svg {
+  width: 6px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.todo-row:hover .drag-handle,
+.drag-handle:focus-visible {
+  opacity: 0.9;
+}
+
+.drag-handle:hover {
+  background: rgba(255, 255, 255, 0.075);
+  color: var(--text-soft);
+  opacity: 1;
+}
+
+.drag-handle:active { cursor: grabbing; }
 
 .add-row {
   display: flex;
@@ -1028,6 +1114,66 @@ kbd {
 /* ---------- Date picker ---------- */
 
 .date-popover { width: 264px; padding: 11px; }
+
+.date-mode {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.date-mode-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+.date-mode-btn svg {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.date-mode-btn:hover {
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-soft);
+}
+
+.date-mode-btn.is-active {
+  background: rgba(255, 255, 255, 0.095);
+  color: var(--text);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.055),
+    0 1px 2px rgba(0, 0, 0, 0.22);
+}
+
+.date-mode-btn[data-date-mode="waiting"].is-active { color: #b9e0e3; }
+
+.date-mode-hint {
+  margin: 7px 2px 9px;
+  color: var(--muted-2);
+  font-size: 9.5px;
+  font-weight: 450;
+  line-height: 1.3;
+}
 
 .calendar-head {
   display: flex;
@@ -1344,6 +1490,10 @@ textarea:focus-visible {
 [data-theme="light"] .todo-list::-webkit-scrollbar-thumb { background: rgba(28, 30, 38, 0.12); }
 [data-theme="light"] .todo-row:hover { background: rgba(28, 30, 38, 0.035); }
 [data-theme="light"] .check { border-color: rgba(28, 30, 38, 0.24); }
+[data-theme="light"] .todo-row.is-waiting:not(.is-done) .todo-title { color: rgba(28, 30, 38, 0.52); }
+[data-theme="light"] .todo-row.is-waiting:not(.is-done) .check { border-color: rgba(28, 30, 38, 0.16); }
+[data-theme="light"] .drag-handle { color: rgba(28, 30, 38, 0.42); }
+[data-theme="light"] .drag-handle:hover { background: rgba(28, 30, 38, 0.07); color: rgba(28, 30, 38, 0.78); }
 [data-theme="light"] .todo-title:hover { background: rgba(28, 30, 38, 0.03); }
 [data-theme="light"] .todo-title:focus { background: rgba(28, 30, 38, 0.06); }
 
@@ -1365,6 +1515,17 @@ textarea:focus-visible {
 }
 
 [data-theme="light"] .due-chip.is-none { border-color: rgba(28, 30, 38, 0.09); }
+
+[data-theme="light"] .due-chip.is-waiting:not(.is-today) {
+  background: rgba(63, 128, 140, 0.09);
+  color: #48747a;
+}
+
+[data-theme="light"] .due-chip.is-waiting:not(.is-today):hover {
+  background: rgba(63, 128, 140, 0.14);
+  color: #365d62;
+}
+
 [data-theme="light"] .delete-todo:hover { background: rgba(200, 73, 63, 0.11); }
 
 [data-theme="light"] .empty-state {
@@ -1391,6 +1552,17 @@ textarea:focus-visible {
 [data-theme="light"] .menu-item:hover { background: rgba(28, 30, 38, 0.06); }
 [data-theme="light"] .menu-item.danger { color: #b23a31; }
 [data-theme="light"] .menu-item.danger:hover { background: rgba(200, 73, 63, 0.10); color: #9c2f28; }
+[data-theme="light"] .date-mode { background: rgba(28, 30, 38, 0.05); }
+[data-theme="light"] .date-mode-btn:hover { background: rgba(28, 30, 38, 0.045); }
+[data-theme="light"] .date-mode-btn.is-active {
+  background: rgba(255, 255, 255, 0.92);
+  color: rgba(28, 30, 38, 0.95);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 1px 2px rgba(58, 50, 34, 0.16);
+}
+[data-theme="light"] .date-mode-btn[data-date-mode="waiting"].is-active { color: #3e696e; }
+[data-theme="light"] .date-mode-hint { color: rgba(28, 30, 38, 0.44); }
 [data-theme="light"] .calendar-nav button:hover { background: rgba(28, 30, 38, 0.07); }
 [data-theme="light"] .day:hover { background: rgba(28, 30, 38, 0.07); }
 [data-theme="light"] .day.is-outside { color: rgba(28, 30, 38, 0.22); }

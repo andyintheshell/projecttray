@@ -320,6 +320,374 @@ try {
     `${layout.checkCenterOffset}px`,
   );
 
+  // Waiting tasks and date modes
+  const waitingUi = await cdp.evaluate(`(() => {
+    const card = document.querySelectorAll('.project-card')[3];
+    const rows = [...card.querySelectorAll('.todo-row')];
+    const row = rows.find((item) => item.querySelector('.todo-title').value === 'Order the monitor arm');
+    const normal = rows.find((item) => item.querySelector('.todo-title').value === 'Measure the desk nook');
+    const chip = row.querySelector('.due-chip');
+    const handle = row.querySelector('.drag-handle');
+    const cardRect = card.getBoundingClientRect();
+    const chipRect = chip.getBoundingClientRect();
+    const handleRect = handle.getBoundingClientRect();
+    return {
+      todoId: row.dataset.todoId,
+      waitingClass: row.classList.contains('is-waiting'),
+      chipWaitingClass: chip.classList.contains('is-waiting'),
+      hasClock: Boolean(chip.querySelector('.clock-icon')),
+      hasCalendar: Boolean(chip.querySelector('.calendar-icon')),
+      aria: chip.getAttribute('aria-label'),
+      label: chip.textContent.trim(),
+      titleColor: getComputedStyle(row.querySelector('.todo-title')).color,
+      normalTitleColor: getComputedStyle(normal.querySelector('.todo-title')).color,
+      chipColor: getComputedStyle(chip).color,
+      chipBackground: getComputedStyle(chip).backgroundColor,
+      normalChipBackground: getComputedStyle(normal.querySelector('.due-chip')).backgroundColor,
+      handleLeft: handleRect.left,
+      handleRight: handleRect.right,
+      chipRight: chipRect.right,
+      cardRight: cardRect.right,
+      handleWidth: handleRect.width,
+      handleHeight: handleRect.height,
+      handleOpacity: getComputedStyle(handle).opacity,
+    };
+  })()`);
+  check(
+    "waiting task shows a clock instead of a calendar",
+    waitingUi.waitingClass &&
+      waitingUi.chipWaitingClass &&
+      waitingUi.hasClock &&
+      !waitingUi.hasCalendar,
+    JSON.stringify(waitingUi),
+  );
+  check(
+    "waiting task greys the row but keeps the date legible",
+    waitingUi.aria.startsWith("Waiting until") &&
+      waitingUi.label.length > 0 &&
+      waitingUi.titleColor !== waitingUi.normalTitleColor &&
+      waitingUi.chipColor !== waitingUi.titleColor &&
+      waitingUi.chipBackground !== waitingUi.normalChipBackground,
+    JSON.stringify(waitingUi),
+  );
+  check(
+    "drag handle sits right of the date inside the card",
+    waitingUi.handleLeft >= waitingUi.chipRight - 0.5 &&
+      waitingUi.handleRight <= waitingUi.cardRight - 1 &&
+      waitingUi.handleWidth <= 12 &&
+      waitingUi.handleHeight <= 28,
+    JSON.stringify(waitingUi),
+  );
+  check(
+    "drag handle is visible but subdued at rest",
+    Number(waitingUi.handleOpacity) >= 0.2 && Number(waitingUi.handleOpacity) <= 0.5,
+    waitingUi.handleOpacity,
+  );
+
+  await cdp.send("DOM.enable");
+  await cdp.send("CSS.enable");
+  const { root } = await cdp.send("DOM.getDocument", { depth: 0 });
+  const hoverRow = await cdp.send("DOM.querySelector", {
+    nodeId: root.nodeId,
+    selector: ".project-card:nth-child(4) .todo-row.is-waiting",
+  });
+  await cdp.send("CSS.forcePseudoState", {
+    nodeId: hoverRow.nodeId,
+    forcedPseudoClasses: ["hover"],
+  });
+  const hoveredHandle = await cdp.evaluate(`(() => {
+    const card = document.querySelectorAll('.project-card')[3];
+    const handle = card.querySelector('.todo-row.is-waiting .drag-handle');
+    handle.getAnimations().forEach((animation) => animation.finish());
+    return getComputedStyle(handle).opacity;
+  })()`);
+  check(
+    "drag handle becomes prominent on row hover",
+    Number(hoveredHandle) > Number(waitingUi.handleOpacity) &&
+      Number(hoveredHandle) >= 0.6,
+    `${waitingUi.handleOpacity} -> ${hoveredHandle}`,
+  );
+  await cdp.send("CSS.forcePseudoState", {
+    nodeId: hoverRow.nodeId,
+    forcedPseudoClasses: [],
+  });
+
+  await cdp.evaluate(`(() => {
+    const row = document.querySelectorAll('.project-card')[3].querySelector('.todo-row.is-waiting');
+    const chip = row.querySelector('.due-chip');
+    chip.dataset.modeProbe = 'kept';
+    chip.click();
+  })()`);
+  await sleep(80);
+  const modePicker = await cdp.evaluate(`(() => {
+    const mode = document.querySelector('.date-mode');
+    const head = document.querySelector('.calendar-head');
+    return {
+      visible: Boolean(document.querySelector('.date-popover')),
+      buttons: document.querySelectorAll('[data-date-mode]').length,
+      active: document.querySelector('[data-date-mode].is-active')?.dataset.dateMode,
+      waitingPressed: document
+        .querySelector('[data-date-mode="waiting"]')
+        .getAttribute('aria-pressed'),
+      hint: document.querySelector('.date-mode-hint')?.textContent,
+      modeAboveCalendar:
+        mode && head ? mode.getBoundingClientRect().top < head.getBoundingClientRect().top : false,
+    };
+  })()`);
+  check(
+    "date picker shows a deadline/waiting mode above the calendar",
+    modePicker.visible &&
+      modePicker.buttons === 2 &&
+      modePicker.active === "waiting" &&
+      modePicker.waitingPressed === "true" &&
+      modePicker.hint === "Waiting until this date." &&
+      modePicker.modeAboveCalendar,
+    JSON.stringify(modePicker),
+  );
+
+  await cdp.evaluate(`document.querySelector('[data-date-mode="deadline"]').click()`);
+  await sleep(80);
+  const deadlineUi = await cdp.evaluate(`(() => {
+    const row = document.querySelectorAll('.project-card')[3]
+      .querySelector('.todo-row[data-todo-id="${waitingUi.todoId}"]');
+    const chip = row.querySelector('.due-chip');
+    return {
+      popoverOpen: Boolean(document.querySelector('.date-popover')),
+      active: document.querySelector('[data-date-mode].is-active')?.dataset.dateMode,
+      hint: document.querySelector('.date-mode-hint')?.textContent,
+      rowWaiting: row.classList.contains('is-waiting'),
+      chipMode: chip.dataset.dueMode,
+      hasClock: Boolean(chip.querySelector('.clock-icon')),
+      hasCalendar: Boolean(chip.querySelector('.calendar-icon')),
+      aria: chip.getAttribute('aria-label'),
+      probe: chip.dataset.modeProbe,
+      focusedMode: document.activeElement?.dataset?.dateMode,
+    };
+  })()`);
+  check(
+    "switching to deadline updates the existing row in place",
+    deadlineUi.popoverOpen &&
+      deadlineUi.active === "deadline" &&
+      deadlineUi.hint === "Finish by this date." &&
+      !deadlineUi.rowWaiting &&
+      deadlineUi.chipMode === "deadline" &&
+      !deadlineUi.hasClock &&
+      deadlineUi.hasCalendar &&
+      deadlineUi.aria.startsWith("Deadline:") &&
+      deadlineUi.probe === "kept" &&
+      deadlineUi.focusedMode === "deadline",
+    JSON.stringify(deadlineUi),
+  );
+
+  await cdp.evaluate(`document.querySelector('[data-date-mode="waiting"]').click()`);
+  await sleep(80);
+  const waitingRestored = await cdp.evaluate(`(() => {
+    const row = document.querySelectorAll('.project-card')[3]
+      .querySelector('.todo-row[data-todo-id="${waitingUi.todoId}"]');
+    const chip = row.querySelector('.due-chip');
+    return {
+      popoverOpen: Boolean(document.querySelector('.date-popover')),
+      active: document.querySelector('[data-date-mode].is-active')?.dataset.dateMode,
+      hint: document.querySelector('.date-mode-hint')?.textContent,
+      rowWaiting: row.classList.contains('is-waiting'),
+      chipMode: chip.dataset.dueMode,
+      hasClock: Boolean(chip.querySelector('.clock-icon')),
+      hasCalendar: Boolean(chip.querySelector('.calendar-icon')),
+      aria: chip.getAttribute('aria-label'),
+      probe: chip.dataset.modeProbe,
+      focusedMode: document.activeElement?.dataset?.dateMode,
+    };
+  })()`);
+  check(
+    "switching back to waiting updates the existing row in place",
+    waitingRestored.popoverOpen &&
+      waitingRestored.active === "waiting" &&
+      waitingRestored.hint === "Waiting until this date." &&
+      waitingRestored.rowWaiting &&
+      waitingRestored.chipMode === "waiting" &&
+      waitingRestored.hasClock &&
+      !waitingRestored.hasCalendar &&
+      waitingRestored.aria.startsWith("Waiting until") &&
+      waitingRestored.probe === "kept" &&
+      waitingRestored.focusedMode === "waiting",
+    JSON.stringify(waitingRestored),
+  );
+  await cdp.evaluate(
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`,
+  );
+  await sleep(700);
+  const storedMode = await cdp.evaluate(`(() => {
+    const stored = JSON.parse(localStorage.getItem('projecttray.state.v1'));
+    const todo = stored.projects[3].todos.find((item) => item.id === '${waitingUi.todoId}');
+    return todo?.dueMode;
+  })()`);
+  check("waiting mode persists", storedMode === "waiting", String(storedMode));
+
+  // Keyboard and pointer reordering
+  const keyboardOrder = await cdp.evaluate(`(async () => {
+    const getRows = () =>
+      [...document.querySelectorAll('.project-card')[0].querySelectorAll('.todo-row')];
+    const nextFrame = () =>
+      new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const before = getRows().map((row) => ({
+      id: row.dataset.todoId,
+      title: row.querySelector('.todo-title').value,
+    }));
+    const movingId = before[1].id;
+    const handle = getRows()[1].querySelector('.drag-handle');
+    handle.focus();
+    handle.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }),
+    );
+    await nextFrame();
+    const afterDown = getRows().map((row) => row.dataset.todoId);
+    const focused = document.activeElement;
+    const focusAfterDown = {
+      id: focused?.dataset?.todoId,
+      isHandle: Boolean(focused?.classList?.contains('drag-handle')),
+    };
+    focused.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }),
+    );
+    await nextFrame();
+    return {
+      before,
+      movingId,
+      afterDown,
+      afterUp: getRows().map((row) => row.dataset.todoId),
+      focusAfterDown,
+      focusAfterUp: document.activeElement?.dataset?.todoId,
+    };
+  })()`);
+  const seedOrder = keyboardOrder.before.map((item) => item.id);
+  check(
+    "arrow keys move a focused task down",
+    JSON.stringify(keyboardOrder.afterDown) ===
+      JSON.stringify([seedOrder[0], seedOrder[2], seedOrder[1], seedOrder[3]]),
+    JSON.stringify(keyboardOrder.afterDown),
+  );
+  check(
+    "keyboard focus follows the task",
+    keyboardOrder.focusAfterDown.isHandle && keyboardOrder.focusAfterDown.id === seedOrder[1],
+    JSON.stringify(keyboardOrder.focusAfterDown),
+  );
+  check(
+    "arrow keys move a focused task back up",
+    JSON.stringify(keyboardOrder.afterUp) === JSON.stringify(seedOrder),
+    JSON.stringify(keyboardOrder.afterUp),
+  );
+  check(
+    "keyboard focus follows the task back",
+    keyboardOrder.focusAfterUp === seedOrder[1],
+    String(keyboardOrder.focusAfterUp),
+  );
+
+  const dragOrder = await cdp.evaluate(`(async () => {
+    const getRows = () =>
+      [...document.querySelectorAll('.project-card')[0].querySelectorAll('.todo-row')];
+    const before = getRows().map((row) => ({
+      id: row.dataset.todoId,
+      title: row.querySelector('.todo-title').value,
+    }));
+    const source = getRows()[0];
+    const target = getRows()[2];
+    const dataTransfer = new DataTransfer();
+    const rect = target.getBoundingClientRect();
+    const clientY = rect.top + rect.height * 0.8;
+    source.querySelector('.drag-handle').dispatchEvent(
+      new DragEvent('dragstart', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer,
+        clientY: rect.top + 2,
+      }),
+    );
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
+    const dragging = source.classList.contains('is-dragging');
+    target.dispatchEvent(
+      new DragEvent('dragover', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer,
+        clientX: rect.left + 20,
+        clientY,
+      }),
+    );
+    const dropHint = target.classList.contains('is-drop-after');
+    target.dispatchEvent(
+      new DragEvent('drop', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer,
+        clientX: rect.left + 20,
+        clientY,
+      }),
+    );
+    return {
+      before,
+      dragging,
+      dropHint,
+      after: getRows().map((row) => row.dataset.todoId),
+      hintsCleared: !document.querySelector(
+        '.is-drop-before, .is-drop-after, .is-drop-end',
+      ),
+      draggingCleared: !document.querySelector('.todo-row.is-dragging'),
+    };
+  })()`);
+  const draggedIds = dragOrder.before.map((item) => item.id);
+  check(
+    "dragging a task shows the grab and drop states",
+    dragOrder.dragging && dragOrder.dropHint,
+    JSON.stringify({ dragging: dragOrder.dragging, dropHint: dragOrder.dropHint }),
+  );
+  check(
+    "dropping a task moves it after the target",
+    JSON.stringify(dragOrder.after) ===
+      JSON.stringify([draggedIds[1], draggedIds[2], draggedIds[0], draggedIds[3]]),
+    JSON.stringify(dragOrder.after),
+  );
+  check(
+    "drop indicators clear after reordering",
+    dragOrder.hintsCleared && dragOrder.draggingCleared,
+    JSON.stringify(dragOrder),
+  );
+
+  await sleep(700);
+  const storedOrder = await cdp.evaluate(`(() => {
+    const stored = JSON.parse(localStorage.getItem('projecttray.state.v1'));
+    return stored.projects[0].todos.map((todo) => todo.id);
+  })()`);
+  check(
+    "dragged task order persists",
+    JSON.stringify(storedOrder) === JSON.stringify(dragOrder.after),
+    JSON.stringify(storedOrder),
+  );
+
+  await cdp.send("Page.reload", { ignoreCache: true });
+  await waitFor(() => appReady(cdp.evaluate), "reorder reload");
+  const reloadedOrder = await cdp.evaluate(`(() => {
+    const waitingRow = document.querySelectorAll('.project-card')[3]
+      .querySelector('.todo-row.is-waiting');
+    return {
+      order: [...document.querySelectorAll('.project-card')[0]
+        .querySelectorAll('.todo-row')].map((row) => row.dataset.todoId),
+      waiting: Boolean(waitingRow),
+      waitingClock: Boolean(waitingRow?.querySelector('.due-chip .clock-icon')),
+    };
+  })()`);
+  check(
+    "reload keeps dragged task order",
+    JSON.stringify(reloadedOrder.order) === JSON.stringify(dragOrder.after),
+    JSON.stringify(reloadedOrder.order),
+  );
+  check(
+    "reload keeps waiting mode",
+    reloadedOrder.waiting && reloadedOrder.waitingClock,
+    JSON.stringify(reloadedOrder),
+  );
+
   const longTitle = "Prepare the detailed relocation checklist for the Madrid apartment";
   await cdp.evaluate(`(() => {
     const title = document.querySelector('.project-card .todo-row .todo-title');
@@ -506,14 +874,25 @@ try {
   await sleep(80);
   const doneState = await cdp.evaluate(`(() => {
     const card = document.querySelector('.project-card[data-project-card="${projectId}"]');
+    const rows = [...card.querySelectorAll('.todo-row')];
     return {
       done: card.querySelectorAll('.todo-row.is-done').length,
       count: card.querySelector('.project-count').textContent,
+      firstDone: rows[0].classList.contains('is-done'),
+      firstTitle: rows[0].querySelector('.todo-title').value,
+      secondTitle: rows[1].querySelector('.todo-title').value,
     };
   })()`);
   check(
     "task toggles complete",
     doneState.done === 1 && doneState.count === "1 / 2 done",
+    JSON.stringify(doneState),
+  );
+  check(
+    "completed tasks keep their manual position",
+    doneState.firstDone &&
+      doneState.firstTitle === "Untitled task" &&
+      doneState.secondTitle === "Record demo",
     JSON.stringify(doneState),
   );
 
@@ -527,10 +906,16 @@ try {
     title: document.querySelector('.calendar-title')?.textContent,
     days: document.querySelectorAll('[data-calendar-date]').length,
     quick: document.querySelectorAll('[data-calendar-quick]').length,
+    mode: document.querySelector('[data-date-mode].is-active')?.dataset.dateMode,
+    hint: document.querySelector('.date-mode-hint')?.textContent,
   }))()`);
   check(
     "date picker opens with 42 days and quick actions",
-    picker.visible && picker.days === 42 && picker.quick === 3,
+    picker.visible &&
+      picker.days === 42 &&
+      picker.quick === 3 &&
+      picker.mode === "deadline" &&
+      picker.hint === "Finish by this date.",
     JSON.stringify(picker),
   );
   await cdp.evaluate(`document.querySelector('[data-calendar-quick="tomorrow"]').click()`);
@@ -550,6 +935,51 @@ try {
     "date quick-action sets Tomorrow and closes",
     tomorrow.label === "Tomorrow" && tomorrow.pickerClosed,
     JSON.stringify(tomorrow),
+  );
+
+  await cdp.evaluate(
+    `document.querySelector('.project-card[data-project-card="${projectId}"] .due-chip').click()`,
+  );
+  await sleep(80);
+  await cdp.evaluate(`document.querySelector('[data-date-mode="waiting"]').click()`);
+  await sleep(80);
+  const waitingMode = await cdp.evaluate(`(() => {
+    const row = document.querySelector('.project-card[data-project-card="${projectId}"] .todo-row');
+    return {
+      rowWaiting: row.classList.contains('is-waiting'),
+      chipMode: row.querySelector('.due-chip').dataset.dueMode,
+      hasClock: Boolean(row.querySelector('.due-chip .clock-icon')),
+      hint: document.querySelector('.date-mode-hint')?.textContent,
+      popoverOpen: Boolean(document.querySelector('.date-popover')),
+    };
+  })()`);
+  check(
+    "waiting mode updates an existing task in place",
+    waitingMode.rowWaiting &&
+      waitingMode.chipMode === "waiting" &&
+      waitingMode.hasClock &&
+      waitingMode.hint === "Waiting until this date." &&
+      waitingMode.popoverOpen,
+    JSON.stringify(waitingMode),
+  );
+  await cdp.evaluate(`document.querySelector('[data-calendar-quick="tomorrow"]').click()`);
+  await sleep(120);
+  const waitingTomorrow = await cdp.evaluate(`(() => {
+    const row = document.querySelector('.project-card[data-project-card="${projectId}"] .todo-row');
+    return {
+      label: row.querySelector('.due-chip').textContent.trim(),
+      rowWaiting: row.classList.contains('is-waiting'),
+      hasClock: Boolean(row.querySelector('.due-chip .clock-icon')),
+      pickerClosed: !document.querySelector('.date-popover'),
+    };
+  })()`);
+  check(
+    "waiting mode applies to a newly selected date",
+    waitingTomorrow.label === "Tomorrow" &&
+      waitingTomorrow.rowWaiting &&
+      waitingTomorrow.hasClock &&
+      waitingTomorrow.pickerClosed,
+    JSON.stringify(waitingTomorrow),
   );
 
   // Project menu + color
@@ -613,6 +1043,11 @@ try {
     stored.projects[4]?.todos.some((todo) => todo.due === tomorrow.key),
     JSON.stringify(stored.projects[4]?.todos.map((todo) => todo.due)),
   );
+  check(
+    "state persisted waiting mode",
+    stored.projects[4]?.todos.some((todo) => todo.dueMode === "waiting"),
+    JSON.stringify(stored.projects[4]?.todos.map((todo) => todo.dueMode)),
+  );
   check("state persisted light theme", stored.theme === "light", String(stored.theme));
 
   // Reload and verify persistence
@@ -625,6 +1060,18 @@ try {
     `document.querySelectorAll('.project-card')[4].style.getPropertyValue('--accent')`,
   );
   check("reload keeps card color", reloadAccent === "#c6a7ff", reloadAccent);
+  const reloadedWaitingTask = await cdp.evaluate(`(() => {
+    const row = document.querySelectorAll('.project-card')[4].querySelector('.todo-row');
+    return {
+      waiting: row.classList.contains('is-waiting'),
+      clock: Boolean(row.querySelector('.due-chip .clock-icon')),
+    };
+  })()`);
+  check(
+    "reload keeps task waiting mode",
+    reloadedWaitingTask.waiting && reloadedWaitingTask.clock,
+    JSON.stringify(reloadedWaitingTask),
+  );
 
   // Delete project + undo
   await cdp.evaluate(
