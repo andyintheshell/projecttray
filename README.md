@@ -107,6 +107,10 @@ without a theme fall back to the macOS system appearance.
   steady instead of being repainted by the WebView.
 - **WebView UI** — dependency-free HTML, CSS, and JavaScript for fast iteration
   on the visual layer. Tauri still owns the native shell and data layer.
+- **Pointer-driven task reordering** — the task grip uses pointer events instead
+  of HTML5 drag-and-drop, because Tauri's native drag/drop handler intercepts DOM
+  drag events on macOS. The window also disables that handler, so the WebView
+  owns drag input and reordering behaves the same in WKWebView.
 
 The overlay is a transparent, borderless window that is resized to the display
 under the cursor each time it opens. The panel itself is rendered in the

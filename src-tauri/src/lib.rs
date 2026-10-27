@@ -219,6 +219,10 @@ pub fn run() {
             .skip_taskbar(true)
             .visible(false)
             .focused(true)
+            // Tauri's native drag/drop handler consumes DOM drag events on
+            // macOS. The UI reorders tasks with pointer events and does not
+            // listen for file drops, so let the webview own drag input.
+            .disable_drag_drop_handler()
             .build()?;
 
             let show_item = MenuItem::with_id(app, "show", "Open ProjectTray", true, None::<&str>)?;

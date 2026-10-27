@@ -620,6 +620,33 @@ h1 em {
   opacity: 0.38;
 }
 
+body.is-reordering,
+body.is-reordering * {
+  cursor: grabbing !important;
+}
+
+.drag-ghost {
+  position: fixed;
+  z-index: 150;
+  max-width: 260px;
+  padding: 6px 10px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  color: var(--text-soft);
+  font-size: 12.5px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+[data-theme="light"] .drag-ghost {
+  box-shadow: 0 12px 28px rgba(28, 30, 38, 0.18);
+}
+
 .todo-row.is-drop-before::before,
 .todo-row.is-drop-after::after {
   content: "";
@@ -851,7 +878,7 @@ h1 em {
   cursor: grab;
   opacity: 0.3;
   transform: translateY(-50%);
-  -webkit-user-drag: element;
+  touch-action: none;
   transition: opacity 130ms ease, background 130ms ease, color 130ms ease;
 }
 

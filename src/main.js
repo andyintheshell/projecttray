@@ -638,7 +638,6 @@ function renderTodo(project, todo) {
       <button
         class="drag-handle"
         type="button"
-        draggable="true"
         data-project-id="${escapeHtml(project.id)}"
         data-todo-id="${escapeHtml(todo.id)}"
         title="Drag to reorder. Use ↑ or ↓ to move."
@@ -1123,56 +1122,35 @@ function clearTodoDropHints() {
   }
 }
 
-function clearTodoDragState() {
-  if (draggedTodo) {
-    const row = dom.grid.querySelector(
-      `.todo-row[data-todo-id="${cssEscape(draggedTodo.todoId)}"]`,
-    );
-    row?.classList.remove("is-dragging");
-  }
-  draggedTodo = null;
-  todoDropTarget = null;
-  clearTodoDropHints();
+function positionTodoDragGhost() {
+  const ghost = draggedTodo?.ghost;
+  if (!ghost) return;
+
+  const margin = 8;
+  const offset = 14;
+  const maxLeft = Math.max(margin, window.innerWidth - ghost.offsetWidth - margin);
+  const maxTop = Math.max(margin, window.innerHeight - ghost.offsetHeight - margin);
+  const left = Math.min(Math.max(margin, draggedTodo.clientX + offset), maxLeft);
+  const top = Math.min(Math.max(margin, draggedTodo.clientY + offset), maxTop);
+
+  ghost.style.left = `${Math.round(left)}px`;
+  ghost.style.top = `${Math.round(top)}px`;
 }
 
-function handleTodoDragStart(event) {
-  const handle = event.target.closest(".drag-handle");
-  if (!handle) return;
+function updateTodoDropTarget(clientX, clientY) {
+  if (!draggedTodo?.active) return;
 
-  const row = handle.closest(".todo-row");
-  if (!row) return;
-
-  draggedTodo = {
-    projectId: row.dataset.projectId,
-    todoId: row.dataset.todoId,
-  };
-
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", row.dataset.todoId);
-    if (typeof event.dataTransfer.setDragImage === "function") {
-      try {
-        event.dataTransfer.setDragImage(row, 24, row.offsetHeight / 2);
-      } catch {
-        // Synthetic drag events cannot always set a drag image.
-      }
-    }
+  const element = document.elementFromPoint(clientX, clientY);
+  const list = element?.closest?.(".todo-list");
+  if (!list || list.dataset.projectId !== draggedTodo.projectId) {
+    todoDropTarget = null;
+    clearTodoDropHints();
+    return;
   }
 
-  requestAnimationFrame(() => row.classList.add("is-dragging"));
-}
-
-function handleTodoDragOver(event) {
-  if (!draggedTodo) return;
-
-  const list = event.target.closest(".todo-list");
-  if (!list || list.dataset.projectId !== draggedTodo.projectId) return;
-
-  event.preventDefault();
-  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
   clearTodoDropHints();
 
-  const row = event.target.closest(".todo-row");
+  const row = element.closest(".todo-row");
   if (!row) {
     todoDropTarget = { todoId: null, after: true };
     list.classList.add("is-drop-end");
@@ -1185,30 +1163,175 @@ function handleTodoDragOver(event) {
   }
 
   const rect = row.getBoundingClientRect();
-  const after = event.clientY >= rect.top + rect.height / 2;
+  const after = clientY >= rect.top + rect.height / 2;
   row.classList.add(after ? "is-drop-after" : "is-drop-before");
   todoDropTarget = { todoId: row.dataset.todoId, after };
 }
 
-function handleTodoDrop(event) {
+function startTodoAutoScroll() {
   if (!draggedTodo) return;
 
-  const list = event.target.closest(".todo-list");
-  if (!list || list.dataset.projectId !== draggedTodo.projectId) return;
+  const step = () => {
+    if (!draggedTodo?.active) return;
 
-  event.preventDefault();
-  if (todoDropTarget) {
-    reorderTodo(
-      draggedTodo.projectId,
-      draggedTodo.todoId,
-      todoDropTarget.todoId,
-      todoDropTarget.after,
+    const list = dom.grid.querySelector(
+      `.todo-list[data-project-id="${cssEscape(draggedTodo.projectId)}"]`,
     );
-  }
-  clearTodoDragState();
+    if (list) {
+      const rect = list.getBoundingClientRect();
+      const edge = 24;
+      let delta = 0;
+
+      if (draggedTodo.clientY < rect.top + edge) {
+        delta = -Math.min(12, Math.ceil((rect.top + edge - draggedTodo.clientY) / 2));
+      } else if (draggedTodo.clientY > rect.bottom - edge) {
+        delta = Math.min(12, Math.ceil((draggedTodo.clientY - rect.bottom + edge) / 2));
+      }
+
+      if (delta !== 0) {
+        const before = list.scrollTop;
+        list.scrollTop = Math.max(
+          0,
+          Math.min(list.scrollHeight - list.clientHeight, list.scrollTop + delta),
+        );
+        if (list.scrollTop !== before) {
+          updateTodoDropTarget(draggedTodo.clientX, draggedTodo.clientY);
+        }
+      }
+    }
+
+    draggedTodo.scrollFrame = requestAnimationFrame(step);
+  };
+
+  draggedTodo.scrollFrame = requestAnimationFrame(step);
 }
 
-function handleTodoDragEnd() {
+function activateTodoDrag() {
+  if (!draggedTodo || draggedTodo.active) return;
+
+  draggedTodo.active = true;
+  draggedTodo.row.classList.add("is-dragging");
+  document.body.classList.add("is-reordering");
+  closePopover();
+
+  const ghost = document.createElement("div");
+  ghost.className = "drag-ghost";
+  ghost.textContent =
+    draggedTodo.row.querySelector(".todo-title")?.value.trim() || "Untitled task";
+  ghost.setAttribute("aria-hidden", "true");
+  document.body.append(ghost);
+  draggedTodo.ghost = ghost;
+
+  positionTodoDragGhost();
+  startTodoAutoScroll();
+}
+
+function clearTodoDragState() {
+  const session = draggedTodo;
+  draggedTodo = null;
+  todoDropTarget = null;
+  clearTodoDropHints();
+  document.body.classList.remove("is-reordering");
+
+  if (!session) return;
+
+  session.row?.classList.remove("is-dragging");
+  session.ghost?.remove();
+  if (session.scrollFrame) cancelAnimationFrame(session.scrollFrame);
+  if (session.capture) {
+    try {
+      session.handle.releasePointerCapture(session.pointerId);
+    } catch {
+      // The pointer may already be gone.
+    }
+  }
+
+  window.removeEventListener("pointermove", handleTodoPointerMove, true);
+  window.removeEventListener("pointerup", handleTodoPointerUp, true);
+  window.removeEventListener("pointercancel", handleTodoPointerCancel, true);
+  window.removeEventListener("blur", handleTodoPointerCancel);
+}
+
+function handleTodoPointerDown(event) {
+  if (event.button !== 0 || draggedTodo) return;
+
+  const handle = event.target.closest(".drag-handle");
+  if (!handle) return;
+
+  const row = handle.closest(".todo-row");
+  if (!row) return;
+
+  event.preventDefault();
+  handle.focus({ preventScroll: true });
+
+  draggedTodo = {
+    projectId: row.dataset.projectId,
+    todoId: row.dataset.todoId,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    active: false,
+    row,
+    handle,
+    ghost: null,
+    scrollFrame: null,
+    capture: false,
+  };
+
+  try {
+    handle.setPointerCapture(event.pointerId);
+    draggedTodo.capture = true;
+  } catch {
+    // Synthetic pointer events cannot always be captured.
+  }
+
+  window.addEventListener("pointermove", handleTodoPointerMove, true);
+  window.addEventListener("pointerup", handleTodoPointerUp, true);
+  window.addEventListener("pointercancel", handleTodoPointerCancel, true);
+  window.addEventListener("blur", handleTodoPointerCancel);
+}
+
+function handleTodoPointerMove(event) {
+  if (!draggedTodo || event.pointerId !== draggedTodo.pointerId) return;
+
+  draggedTodo.clientX = event.clientX;
+  draggedTodo.clientY = event.clientY;
+
+  if (!draggedTodo.active) {
+    const distance = Math.hypot(
+      event.clientX - draggedTodo.startX,
+      event.clientY - draggedTodo.startY,
+    );
+    if (distance < 4) return;
+    activateTodoDrag();
+  }
+
+  event.preventDefault();
+  positionTodoDragGhost();
+  updateTodoDropTarget(event.clientX, event.clientY);
+}
+
+function handleTodoPointerUp(event) {
+  if (!draggedTodo || event.pointerId !== draggedTodo.pointerId) return;
+
+  const session = draggedTodo;
+  const target = todoDropTarget;
+  const wasActive = session.active;
+
+  if (wasActive) event.preventDefault();
+  clearTodoDragState();
+
+  if (!wasActive || !target) return;
+
+  pendingFocus = { kind: "drag-handle", todoId: session.todoId };
+  reorderTodo(session.projectId, session.todoId, target.todoId, target.after);
+}
+
+function handleTodoPointerCancel(event) {
+  if (!draggedTodo) return;
+  if (event?.pointerId != null && event.pointerId !== draggedTodo.pointerId) return;
   clearTodoDragState();
 }
 
@@ -1400,6 +1523,12 @@ function handleDocumentClick(event) {
 }
 
 function handleKeydown(event) {
+  if (event.key === "Escape" && draggedTodo) {
+    event.preventDefault();
+    clearTodoDragState();
+    return;
+  }
+
   if (event.key === "Escape") {
     event.preventDefault();
     if (activePopover) {
@@ -1427,10 +1556,7 @@ function bindEvents() {
   dom.grid.addEventListener("input", handleGridInput);
   dom.grid.addEventListener("keydown", handleGridKeydown);
   dom.grid.addEventListener("focusout", handleGridFocusOut);
-  dom.grid.addEventListener("dragstart", handleTodoDragStart);
-  dom.grid.addEventListener("dragover", handleTodoDragOver);
-  dom.grid.addEventListener("drop", handleTodoDrop);
-  dom.grid.addEventListener("dragend", handleTodoDragEnd);
+  dom.grid.addEventListener("pointerdown", handleTodoPointerDown);
   dom.grid.addEventListener(
     "scroll",
     () => {
