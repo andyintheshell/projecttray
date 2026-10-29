@@ -174,3 +174,11 @@ tray/fullscreen plumbing native.
 - No notifications or sync yet.
 - The build is unsigned and not notarized.
 - Menu bar behavior is macOS-only by design.
+
+## License
+
+The source code is dual-licensed under [MIT](LICENSE-MIT) **or**
+[Apache-2.0](LICENSE-APACHE), at your option. Third-party dependencies and
+assets retain their own licenses.
+
+`SPDX-License-Identifier: MIT OR Apache-2.0`
