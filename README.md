@@ -104,6 +104,25 @@ validation, pruning, and the restore safety copy.
   a check manually, open **Insights > Dependency graph > Dependabot** and click
   **Check for updates** next to the manifest you want to check.
 
+## Releasing
+
+The release workflow builds an unsigned `.dmg` on macOS and creates a draft
+GitHub release. It runs when a `v*` tag is pushed, or manually from
+**Actions > Release > Run workflow**.
+
+Before releasing, set the same version in `package.json`, `package-lock.json`,
+`src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`. The workflow verifies
+that they match and, for tag pushes, that the tag is `v<version>`.
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Review the draft release, then publish it once the DMG is ready. The build is
+unsigned and not notarized, so macOS may show a Gatekeeper warning on first
+launch.
+
 ## Where the data lives
 
 ```text

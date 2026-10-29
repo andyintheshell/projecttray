@@ -1,0 +1,95 @@
+# Build an unsigned macOS DMG and create a draft GitHub release.
+# Run by pushing a matching v* tag or manually from the Actions tab.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build DMG and draft release
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Verify version
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+
+          const packageVersion = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+          const lockVersion = JSON.parse(fs.readFileSync("package-lock.json", "utf8")).packages[""].version;
+          const tauriVersion = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8")).version;
+          const cargoVersion = fs
+            .readFileSync("src-tauri/Cargo.toml", "utf8")
+            .match(/^version = "([^"]+)"$/m)?.[1];
+
+          const versions = { packageVersion, lockVersion, tauriVersion, cargoVersion };
+          const uniqueVersions = new Set(Object.values(versions));
+
+          if (uniqueVersions.size !== 1) {
+            console.error("Version mismatch:", versions);
+            process.exit(1);
+          }
+
+          console.log(`ProjectTray version: ${[...uniqueVersions][0]}`);
+          NODE
+
+      - name: Verify release tag
+        if: github.ref_type == 'tag'
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          expected="v${version}"
+          if [ "${GITHUB_REF_NAME}" != "$expected" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match app version ${expected}"
+            exit 1
+          fi
+
+      - name: Build DMG and create draft release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: "ProjectTray v__VERSION__"
+          releaseBody: |
+            ProjectTray v__VERSION__.
+
+            Download the `.dmg` below, open it, and drag ProjectTray to Applications.
+
+            This build is unsigned and not notarized, so macOS may show a Gatekeeper warning on first launch.
+          releaseDraft: true
+          prerelease: false
+          uploadUpdaterJson: false
+          retryAttempts: 2
+          args: --bundles dmg --no-sign
