@@ -38,6 +38,15 @@ fullscreen app — so the next actions are always one click away.
 - Project menus support recoloring, clearing completed tasks, and deleting with
   undo.
 - All state is saved locally as JSON by the Rust backend.
+- Backup settings live behind the sliders button next to the theme toggle.
+  Automatic snapshots are written to a folder you choose, but only while that
+  folder is available. This is designed for encrypted volumes such as
+  Cryptomator: when the vault is locked, backups pause quietly and resume after
+  it is mounted again.
+- **Back up now** writes a snapshot immediately. **Restore from file…** replaces
+  the current projects with a backup after confirming it contains a project
+  list, and keeps a `projecttray-before-restore.json` safety copy in the app data
+  folder. The newest 30 automatic snapshots are retained.
 - `Esc` or a click on the dimmed backdrop closes the overlay.
 - `⌘N` adds a new project.
 
@@ -80,21 +89,31 @@ The regression suite drives the UI in headless Chrome through the Chrome
 DevTools Protocol. It covers task-row layout (wrapping titles, checkmark
 centering, due-date placement), pointer and keyboard reordering, deadline vs.
 waiting dates, project and task CRUD, undo, the date picker, theme switching,
-and persistence. It starts its own static server and browser on ephemeral ports
-and uses an isolated browser profile, so it does not touch the app's saved
-state. Chrome is expected at the standard macOS location; set `CHROME_PATH` to
-use another Chromium-based browser.
+backup settings and the browser fallback, and persistence. It starts its own
+static server and browser on ephemeral ports and uses an isolated browser
+profile, so it does not touch the app's saved state. Chrome is expected at the
+standard macOS location; set `CHROME_PATH` to use another Chromium-based
+browser. Rust unit tests cover marker-based folder availability, backup
+validation, pruning, and the restore safety copy.
 
 ## Where the data lives
 
 ```text
 ~/Library/Application Support/com.projecttray.app/projecttray.json
+~/Library/Application Support/com.projecttray.app/settings.json
 ```
 
-The file is written atomically by the Rust side whenever the UI changes. Delete
-it while ProjectTray is closed to start over with the sample projects. The file
-also stores the selected `theme` (`"dark"` or `"light"`); older state files
-without a theme fall back to the macOS system appearance.
+`projecttray.json` is written atomically by the Rust side whenever the UI
+changes. Delete it while ProjectTray is closed to start over with the sample
+projects. The file also stores the selected `theme` (`"dark"` or `"light"`);
+older state files without a theme fall back to the macOS system appearance.
+
+`settings.json` stores the backup toggle and folder path separately, so
+restoring a backup never changes where future backups are written. A chosen
+backup folder is marked with a hidden `.projecttray-backups` file. Automatic
+backups only run while both the folder and that marker are present. Backup files
+are named `ProjectTray-backup-YYYY-MM-DD-HHMMSS.json`, and
+`projecttray-before-restore.json` is the safety copy written before a restore.
 
 ## How it is put together
 
