@@ -1,5 +1,10 @@
 const TAURI = window.__TAURI__;
 const STORAGE_KEY = "projecttray.state.v1";
+const BACKUP_SETTINGS_KEY = "projecttray.backup.settings.v1";
+const BACKUP_SNAPSHOTS_KEY = "projecttray.backup.snapshots.v1";
+const BACKUP_ATTEMPT_KEY = "projecttray.backup.last-attempt.v1";
+const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
+const FALLBACK_BACKUP_FOLDER = "~/Backups/ProjectTray";
 
 const PALETTE = [
   "#f4c15d",
@@ -39,6 +44,7 @@ const dom = {
   saveLabel: document.getElementById("save-label"),
   popoverLayer: document.getElementById("popover-layer"),
   themeToggle: document.getElementById("theme-toggle"),
+  settingsToggle: document.getElementById("settings-toggle"),
   toast: document.getElementById("toast"),
   toastMessage: document.getElementById("toast-message"),
   toastAction: document.getElementById("toast-action"),
@@ -59,6 +65,7 @@ let toastUndo = null;
 let currentDayKey = todayKey();
 let draggedTodo = null;
 let todoDropTarget = null;
+let backupBusy = false;
 
 /* -------------------------------------------------------------------------- */
 /* Helpers                                                                    */
@@ -187,6 +194,375 @@ async function applyTheme(value, { persist = false } = {}) {
 function toggleTheme() {
   const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
   void applyTheme(next, { persist: true });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Backups                                                                    */
+/* -------------------------------------------------------------------------- */
+
+function fallbackBackupSettings() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(BACKUP_SETTINGS_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function fallbackSnapshots() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(BACKUP_SNAPSHOTS_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function fallbackBackupStatus() {
+  const settings = fallbackBackupSettings();
+  const snapshots = fallbackSnapshots();
+  return {
+    enabled: Boolean(settings.enabled),
+    folder: typeof settings.folder === "string" && settings.folder ? settings.folder : null,
+    available: Boolean(settings.folder),
+    lastBackupAt: snapshots[0]?.at ?? null,
+    backupCount: snapshots.length,
+    lastError: null,
+  };
+}
+
+function fallbackWriteBackup(snapshot) {
+  const snapshots = fallbackSnapshots();
+  snapshots.unshift({ at: new Date().toISOString(), state: snapshot });
+  localStorage.setItem(BACKUP_SNAPSHOTS_KEY, JSON.stringify(snapshots.slice(0, 30)));
+  localStorage.setItem(BACKUP_ATTEMPT_KEY, String(Date.now()));
+}
+
+function maybeBrowserBackup(snapshot) {
+  if (TAURI?.core?.invoke) return;
+  const settings = fallbackBackupSettings();
+  if (!settings.enabled || !settings.folder) return;
+
+  const now = Date.now();
+  const lastAttempt = Number(localStorage.getItem(BACKUP_ATTEMPT_KEY) ?? 0);
+  if (Number.isFinite(lastAttempt) && now - lastAttempt < BACKUP_INTERVAL_MS) return;
+  fallbackWriteBackup(snapshot);
+}
+
+function backupErrorMessage(error) {
+  if (typeof error === "string" && error) return error;
+  if (error?.message) return error.message;
+  return "Something went wrong with the backup.";
+}
+
+function compactPath(path) {
+  if (!path) return "";
+  if (path.startsWith("~/")) return path;
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length <= 2) return path;
+  return `…/${parts.slice(-2).join("/")}`;
+}
+
+function relativeTime(value) {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return "just now";
+
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (seconds < 45) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.round(hours / 24);
+  if (days < 7) return `${days} d ago`;
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
+    new Date(timestamp),
+  );
+}
+
+function settingsStatus(status, busy) {
+  if (busy) return { className: "is-busy", text: "Working…" };
+  if (!status) return { className: "is-loading", text: "Checking backup folder…" };
+  if (status.lastError) return { className: "is-error", text: status.lastError };
+  if (!status.folder) {
+    return { className: "is-paused", text: "Choose a folder to start backing up." };
+  }
+  if (!status.available) {
+    return { className: "is-paused", text: "Folder unavailable — automatic backups are paused." };
+  }
+  if (!status.enabled) return { className: "is-paused", text: "Automatic backups are off." };
+  if (status.lastBackupAt) {
+    return {
+      className: "is-ready",
+      text: `Last backup ${relativeTime(status.lastBackupAt)} · ${plural(
+        status.backupCount,
+        "snapshot",
+      )}`,
+    };
+  }
+  return { className: "is-ready", text: "Ready for the first backup." };
+}
+
+async function getBackupStatus() {
+  if (TAURI?.core?.invoke) return TAURI.core.invoke("get_backup_status");
+  return fallbackBackupStatus();
+}
+
+function renderSettingsPopover() {
+  if (!activePopover || activePopover.type !== "settings") return;
+
+  const status = activePopover.status;
+  const enabled = Boolean(status?.enabled);
+  const available = Boolean(status?.available);
+  const hasFolder = Boolean(status?.folder);
+  const busy = backupBusy;
+  const stateInfo = settingsStatus(status, busy);
+  const badgeText = !status
+    ? "Checking"
+    : !hasFolder
+      ? "Not set"
+      : !available
+        ? "Paused"
+        : enabled
+          ? "On"
+          : "Off";
+  const badgeClass = available && enabled ? "is-ready" : "is-paused";
+
+  const element = document.createElement("div");
+  element.className = "popover settings-popover";
+  element.setAttribute("role", "dialog");
+  element.setAttribute("aria-label", "Backup settings");
+  element.innerHTML = `
+    <div class="settings-head">
+      <div>
+        <p class="settings-kicker">Settings</p>
+        <h2>Backups</h2>
+      </div>
+      <span class="settings-badge ${badgeClass}">${badgeText}</span>
+    </div>
+    <p class="settings-copy">Automatic snapshots of your projects, saved to a folder you choose.</p>
+    <div class="settings-row">
+      <div class="settings-row-copy">
+        <span class="settings-label">Automatic backups</span>
+        <span class="settings-hint">${
+          enabled ? "Runs after changes, up to every 5 min." : "Automatic snapshots are off."
+        }</span>
+      </div>
+      <button
+        class="settings-switch ${enabled ? "is-on" : ""}"
+        type="button"
+        role="switch"
+        aria-checked="${enabled}"
+        aria-label="Automatic backups"
+        data-backup-toggle
+        ${busy ? "disabled" : ""}
+      >
+        <span class="settings-switch-knob"></span>
+      </button>
+    </div>
+    <div class="settings-folder">
+      <span class="settings-label">Backup folder</span>
+      <span class="settings-path ${hasFolder ? "" : "is-empty"}" title="${escapeHtml(
+        status?.folder ?? "",
+      )}">${escapeHtml(hasFolder ? compactPath(status.folder) : "No folder selected")}</span>
+      <button class="settings-link" type="button" data-backup-choose ${busy ? "disabled" : ""}>
+        ${hasFolder ? "Change…" : "Choose folder…"}
+      </button>
+    </div>
+    <div class="settings-status ${stateInfo.className}">
+      <span class="settings-status-dot" aria-hidden="true"></span>
+      <span>${escapeHtml(stateInfo.text)}</span>
+    </div>
+    <div class="settings-actions">
+      <button class="settings-btn" type="button" data-backup-now ${
+        busy || !hasFolder || !available ? "disabled" : ""
+      }>Back up now</button>
+      <button class="settings-btn" type="button" data-backup-restore ${
+        busy ? "disabled" : ""
+      }>Restore from file…</button>
+    </div>
+    <p class="settings-footnote">Backups pause automatically when the folder is unavailable. The newest 30 snapshots are kept.</p>`;
+
+  dom.popoverLayer.replaceChildren(element);
+  positionPopover(element, activePopover.anchor, 348, "right");
+}
+
+function openSettingsPopover(anchor) {
+  closePopover();
+  activePopover = { type: "settings", anchor, status: null };
+  renderSettingsPopover();
+  void refreshSettingsStatus();
+}
+
+async function refreshSettingsStatus() {
+  try {
+    const status = await getBackupStatus();
+    if (activePopover?.type !== "settings") return;
+    activePopover.status = status;
+    renderSettingsPopover();
+  } catch (error) {
+    if (activePopover?.type !== "settings") return;
+    activePopover.status = {
+      enabled: false,
+      folder: null,
+      available: false,
+      lastBackupAt: null,
+      backupCount: 0,
+      lastError: backupErrorMessage(error),
+    };
+    renderSettingsPopover();
+  }
+}
+
+async function toggleBackups() {
+  if (backupBusy || !activePopover?.status) return;
+
+  const enabled = !activePopover.status.enabled;
+  backupBusy = true;
+  renderSettingsPopover();
+  try {
+    if (TAURI?.core?.invoke) {
+      if (enabled) await flushSave();
+      activePopover.status = await TAURI.core.invoke("set_backup_enabled", { enabled });
+    } else {
+      const settings = fallbackBackupSettings();
+      settings.enabled = enabled;
+      localStorage.setItem(BACKUP_SETTINGS_KEY, JSON.stringify(settings));
+      if (enabled && settings.folder) fallbackWriteBackup(clone(state));
+      activePopover.status = fallbackBackupStatus();
+    }
+  } catch (error) {
+    showToast(backupErrorMessage(error));
+  } finally {
+    backupBusy = false;
+    if (activePopover?.type === "settings") renderSettingsPopover();
+  }
+}
+
+async function chooseBackupFolder() {
+  if (backupBusy) return;
+
+  backupBusy = true;
+  renderSettingsPopover();
+  try {
+    if (TAURI?.core?.invoke) {
+      await flushSave();
+      activePopover.status = await TAURI.core.invoke("choose_backup_folder");
+    } else {
+      const settings = fallbackBackupSettings();
+      settings.enabled = true;
+      settings.folder = FALLBACK_BACKUP_FOLDER;
+      localStorage.setItem(BACKUP_SETTINGS_KEY, JSON.stringify(settings));
+      fallbackWriteBackup(clone(state));
+      activePopover.status = fallbackBackupStatus();
+    }
+  } catch (error) {
+    showToast(backupErrorMessage(error));
+  } finally {
+    backupBusy = false;
+    if (activePopover?.type === "settings") renderSettingsPopover();
+  }
+}
+
+async function backupNow() {
+  if (backupBusy) return;
+
+  backupBusy = true;
+  renderSettingsPopover();
+  try {
+    let status;
+    if (TAURI?.core?.invoke) {
+      await flushSave();
+      status = await TAURI.core.invoke("backup_now", { state: clone(state) });
+    } else {
+      await flushSave();
+      fallbackWriteBackup(clone(state));
+      status = fallbackBackupStatus();
+    }
+    if (activePopover?.type === "settings") activePopover.status = status;
+    showToast("Backup created");
+  } catch (error) {
+    showToast(backupErrorMessage(error));
+    await refreshSettingsStatus();
+  } finally {
+    backupBusy = false;
+    if (activePopover?.type === "settings") renderSettingsPopover();
+  }
+}
+
+function pickBrowserBackupFile() {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json,.json";
+    input.style.display = "none";
+    document.body.append(input);
+
+    const finish = (file) => {
+      input.remove();
+      resolve(file);
+    };
+
+    input.addEventListener("change", () => finish(input.files?.[0] ?? null), { once: true });
+    input.addEventListener("cancel", () => finish(null), { once: true });
+    input.click();
+  });
+}
+
+async function restoreBackupFromFile() {
+  if (backupBusy) return;
+
+  backupBusy = true;
+  renderSettingsPopover();
+  try {
+    // Let any pending edit finish before the backup replaces the state file.
+    await flushSave();
+
+    let restored = null;
+    if (TAURI?.core?.invoke) {
+      const result = await TAURI.core.invoke("restore_backup");
+      if (!result) return;
+      restored = result.state;
+    } else {
+      const file = await pickBrowserBackupFile();
+      if (!file) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch {
+        throw new Error("That file is not valid JSON.");
+      }
+      restored = parsed;
+    }
+
+    if (!restored || !Array.isArray(restored.projects)) {
+      throw new Error("That file does not contain a ProjectTray project list.");
+    }
+
+    const normalized = normalizeState(restored);
+    if (!normalized) {
+      throw new Error("That file does not contain a valid ProjectTray state.");
+    }
+
+    state = normalized;
+    savedVersion = 0;
+    changeVersion = 0;
+    setSaveStatus("saved", "Saved");
+
+    if (!TAURI?.core?.invoke) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+    }
+
+    closePopover();
+    await applyTheme(state.theme, { persist: false });
+    renderAll();
+    showToast(`Restored ${plural(normalized.projects.length, "project")}`);
+  } catch (error) {
+    showToast(backupErrorMessage(error));
+  } finally {
+    backupBusy = false;
+    if (activePopover?.type === "settings") renderSettingsPopover();
+  }
 }
 
 function normalizeDateMode(value) {
@@ -439,6 +815,7 @@ async function saveNow() {
         await TAURI.core.invoke("save_state", { state: snapshot });
       } else {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+        maybeBrowserBackup(snapshot);
       }
       savedVersion = version;
       if (changeVersion === version) {
@@ -1041,6 +1418,19 @@ function renderDatePopover() {
 }
 
 function handlePopoverClick(event) {
+  if (activePopover?.type === "settings") {
+    if (event.target.closest("[data-backup-toggle]")) {
+      void toggleBackups();
+    } else if (event.target.closest("[data-backup-choose]")) {
+      void chooseBackupFolder();
+    } else if (event.target.closest("[data-backup-now]")) {
+      void backupNow();
+    } else if (event.target.closest("[data-backup-restore]")) {
+      void restoreBackupFromFile();
+    }
+    return;
+  }
+
   const modeButton = event.target.closest("[data-date-mode]");
   if (modeButton && activePopover?.type === "date") {
     activePopover.mode = normalizeDateMode(modeButton.dataset.dateMode);
@@ -1567,6 +1957,15 @@ function bindEvents() {
 
   dom.popoverLayer.addEventListener("click", handlePopoverClick);
   dom.themeToggle.addEventListener("click", toggleTheme);
+  if (dom.settingsToggle) {
+    dom.settingsToggle.addEventListener("click", () => {
+      if (activePopover?.type === "settings") {
+        closePopover();
+      } else {
+        openSettingsPopover(dom.settingsToggle);
+      }
+    });
+  }
   document.addEventListener("click", handleDocumentClick);
   document.addEventListener("keydown", handleKeydown);
 

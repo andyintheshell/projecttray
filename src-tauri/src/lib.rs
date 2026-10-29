@@ -1,3 +1,5 @@
+mod backup;
+
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
@@ -31,6 +33,7 @@ fn save_state(app: AppHandle, state: Value) -> Result<(), String> {
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, serialized).map_err(|e| format!("Could not write state: {e}"))?;
     fs::rename(&tmp, &path).map_err(|e| format!("Could not replace state: {e}"))?;
+    backup::auto_backup(&app);
     Ok(())
 }
 
@@ -71,7 +74,7 @@ fn hide_overlay_window(app: &AppHandle) {
     }
 }
 
-fn state_path(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn state_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_data_dir()
@@ -240,11 +243,18 @@ fn configure_overlay(window: &WebviewWindow) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(backup::BackupState::new())
         .invoke_handler(tauri::generate_handler![
             load_state,
             save_state,
             hide_overlay,
-            set_theme
+            set_theme,
+            backup::get_backup_status,
+            backup::backup_now,
+            backup::set_backup_enabled,
+            backup::choose_backup_folder,
+            backup::restore_backup
         ])
         .setup(|app| {
             // The activation policy must be set before the window is created so
@@ -323,6 +333,11 @@ pub fn run() {
                     let _ = handle.run_on_main_thread(move || show_overlay(&main_handle));
                 });
             }
+
+            // Catch up on the automatic backup schedule after a restart
+            // without delaying the first paint.
+            let backup_handle = app.handle().clone();
+            std::thread::spawn(move || backup::auto_backup(&backup_handle));
 
             Ok(())
         })

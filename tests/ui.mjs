@@ -1220,6 +1220,133 @@ try {
   const restoredTheme = await cdp.evaluate(`document.documentElement.dataset.theme`);
   check("fresh state returns to the system dark theme", restoredTheme === "dark", restoredTheme);
 
+  // Backup settings (browser fallback)
+  const settingsEntry = await cdp.evaluate(`(() => {
+    const theme = document.getElementById('theme-toggle');
+    const settings = document.getElementById('settings-toggle');
+    return {
+      exists: Boolean(settings),
+      adjacent: theme?.nextElementSibling === settings,
+      label: settings?.getAttribute('aria-label'),
+    };
+  })()`);
+  check(
+    "settings button sits next to the theme toggle",
+    settingsEntry.exists && settingsEntry.adjacent && settingsEntry.label === "Backup settings",
+    JSON.stringify(settingsEntry),
+  );
+
+  await cdp.evaluate(`document.getElementById('settings-toggle').click()`);
+  const initialSettings = await waitFor(async () => {
+    const info = await cdp.evaluate(`(() => {
+      const popover = document.querySelector('.settings-popover');
+      if (!popover) return false;
+      return {
+        title: popover.querySelector('h2')?.textContent.trim(),
+        switchOn: popover.querySelector('[data-backup-toggle]')?.getAttribute('aria-checked'),
+        folder: popover.querySelector('.settings-path')?.textContent.trim(),
+        status: popover.querySelector('.settings-status')?.textContent.trim(),
+        backupDisabled: popover.querySelector('[data-backup-now]')?.disabled,
+        restoreDisabled: popover.querySelector('[data-backup-restore]')?.disabled,
+      };
+    })()`);
+    return info?.status && info.status !== "Checking backup folder…" ? info : false;
+  }, "settings popover status");
+  check(
+    "settings popover starts with backups off and no folder",
+    initialSettings.title === "Backups" &&
+      initialSettings.switchOn === "false" &&
+      initialSettings.folder === "No folder selected" &&
+      initialSettings.status === "Choose a folder to start backing up." &&
+      initialSettings.backupDisabled === true &&
+      initialSettings.restoreDisabled === false,
+    JSON.stringify(initialSettings),
+  );
+
+  await cdp.evaluate(`document.querySelector('[data-backup-toggle]').click()`);
+  const toggledSettings = await waitFor(async () => {
+    const info = await cdp.evaluate(`(() => {
+      const popover = document.querySelector('.settings-popover');
+      if (!popover) return false;
+      return {
+        switchOn: popover.querySelector('[data-backup-toggle]')?.getAttribute('aria-checked'),
+        hint: popover.querySelector('.settings-hint')?.textContent.trim(),
+        stored: JSON.parse(localStorage.getItem('projecttray.backup.settings.v1') ?? 'null'),
+      };
+    })()`);
+    return info?.switchOn === "true" ? info : false;
+  }, "backup toggle");
+  check(
+    "backup toggle turns on and persists",
+    toggledSettings.switchOn === "true" &&
+      toggledSettings.hint === "Runs after changes, up to every 5 min." &&
+      toggledSettings.stored?.enabled === true,
+    JSON.stringify(toggledSettings),
+  );
+
+  await cdp.evaluate(`document.querySelector('[data-backup-choose]').click()`);
+  const chosenFolder = await waitFor(async () => {
+    const info = await cdp.evaluate(`(() => {
+      const popover = document.querySelector('.settings-popover');
+      if (!popover) return false;
+      const snapshots = JSON.parse(localStorage.getItem('projecttray.backup.snapshots.v1') ?? '[]');
+      return {
+        folder: popover.querySelector('.settings-path')?.textContent.trim(),
+        folderTitle: popover.querySelector('.settings-path')?.getAttribute('title'),
+        status: popover.querySelector('.settings-status')?.textContent.trim(),
+        badge: popover.querySelector('.settings-badge')?.textContent.trim(),
+        backupDisabled: popover.querySelector('[data-backup-now]')?.disabled,
+        stored: JSON.parse(localStorage.getItem('projecttray.backup.settings.v1') ?? 'null'),
+        count: snapshots.length,
+      };
+    })()`);
+    return info?.count >= 1 && info.folder !== "No folder selected" ? info : false;
+  }, "backup folder");
+  check(
+    "choosing a folder enables snapshots immediately",
+    chosenFolder.folder === "~/Backups/ProjectTray" &&
+      chosenFolder.folderTitle === "~/Backups/ProjectTray" &&
+      chosenFolder.status.includes("Last backup just now") &&
+      chosenFolder.status.includes("1 snapshot") &&
+      chosenFolder.badge === "On" &&
+      chosenFolder.backupDisabled === false &&
+      chosenFolder.stored?.folder === "~/Backups/ProjectTray" &&
+      chosenFolder.count === 1,
+    JSON.stringify(chosenFolder),
+  );
+
+  await cdp.evaluate(`document.querySelector('[data-backup-now]').click()`);
+  const manualBackup = await waitFor(async () => {
+    const info = await cdp.evaluate(`(() => {
+      const popover = document.querySelector('.settings-popover');
+      const snapshots = JSON.parse(localStorage.getItem('projecttray.backup.snapshots.v1') ?? '[]');
+      return {
+        status: popover?.querySelector('.settings-status')?.textContent.trim() ?? "",
+        count: snapshots.length,
+        firstHasProjects: Array.isArray(snapshots[0]?.state?.projects),
+        toast: document.getElementById('toast-message').textContent,
+        toastVisible: document.getElementById('toast').classList.contains('is-visible'),
+      };
+    })()`);
+    return info.count >= 2 && info.toastVisible ? info : false;
+  }, "manual backup");
+  check(
+    "back up now writes another snapshot",
+    manualBackup.count === 2 &&
+      manualBackup.status.includes("2 snapshots") &&
+      manualBackup.firstHasProjects &&
+      manualBackup.toast === "Backup created" &&
+      manualBackup.toastVisible,
+    JSON.stringify(manualBackup),
+  );
+
+  await cdp.evaluate(`document.getElementById('settings-toggle').click()`);
+  await sleep(60);
+  const settingsClosed = await cdp.evaluate(
+    `!document.querySelector('.settings-popover')`,
+  );
+  check("settings popover closes from its toolbar button", settingsClosed);
+
   check("no console errors or exceptions", cdp.errors.length === 0, cdp.errors.join(" | "));
 } catch (error) {
   failures += 1;
