@@ -386,9 +386,9 @@ try {
 
   await cdp.send("DOM.enable");
   await cdp.send("CSS.enable");
-  const { root } = await cdp.send("DOM.getDocument", { depth: 0 });
+  const { root: documentRoot } = await cdp.send("DOM.getDocument", { depth: 0 });
   const hoverRow = await cdp.send("DOM.querySelector", {
-    nodeId: root.nodeId,
+    nodeId: documentRoot.nodeId,
     selector: ".project-card:nth-child(4) .todo-row.is-waiting",
   });
   await cdp.send("CSS.forcePseudoState", {
@@ -582,54 +582,120 @@ try {
     String(keyboardOrder.focusAfterUp),
   );
 
+  const handleConfig = await cdp.evaluate(`(() => {
+    const handle = document.querySelector('.drag-handle');
+    return {
+      draggable: handle.draggable,
+      attribute: handle.getAttribute('draggable'),
+      touchAction: getComputedStyle(handle).touchAction,
+    };
+  })()`);
+  check(
+    "drag handles use pointer input instead of native HTML5 drag",
+    handleConfig.draggable === false &&
+      handleConfig.attribute === null &&
+      handleConfig.touchAction === "none",
+    JSON.stringify(handleConfig),
+  );
+
   const dragOrder = await cdp.evaluate(`(async () => {
     const getRows = () =>
       [...document.querySelectorAll('.project-card')[0].querySelectorAll('.todo-row')];
+    const nextFrame = () =>
+      new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const fire = (target, type, x, y, buttons) =>
+      target.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 7,
+          pointerType: 'mouse',
+          isPrimary: true,
+          button: type === 'pointermove' ? -1 : 0,
+          buttons,
+          clientX: x,
+          clientY: y,
+        }),
+      );
+    const center = (element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, rect };
+    };
     const before = getRows().map((row) => ({
       id: row.dataset.todoId,
       title: row.querySelector('.todo-title').value,
     }));
+
+    // A press that stays inside the drag threshold must not reorder anything.
+    const pressHandle = getRows()[0].querySelector('.drag-handle');
+    const pressPoint = center(pressHandle);
+    fire(pressHandle, 'pointerdown', pressPoint.x, pressPoint.y, 1);
+    fire(window, 'pointermove', pressPoint.x + 1, pressPoint.y + 1, 1);
+    fire(window, 'pointerup', pressPoint.x + 1, pressPoint.y + 1, 0);
+    await nextFrame();
+    const afterPress = getRows().map((row) => row.dataset.todoId);
+
+    // Dragging into another project is ignored.
+    const crossSource = getRows()[0];
+    const crossHandle = crossSource.querySelector('.drag-handle');
+    const crossPoint = center(crossHandle);
+    const crossTarget = document.querySelectorAll('.project-card')[1]
+      .querySelector('.todo-row');
+    const crossTargetPoint = center(crossTarget);
+    fire(crossHandle, 'pointerdown', crossPoint.x, crossPoint.y, 1);
+    fire(window, 'pointermove', crossPoint.x + 6, crossPoint.y + 6, 1);
+    await nextFrame();
+    const crossGhost = Boolean(document.querySelector('.drag-ghost'));
+    fire(window, 'pointermove', crossTargetPoint.x, crossTargetPoint.y, 1);
+    await nextFrame();
+    const crossHintCleared = !document.querySelector(
+      '.is-drop-before, .is-drop-after, .is-drop-end',
+    );
+    fire(window, 'pointerup', crossTargetPoint.x, crossTargetPoint.y, 0);
+    await nextFrame();
+    const afterCross = getRows().map((row) => row.dataset.todoId);
+    const crossGhostCleared = !document.querySelector('.drag-ghost');
+
+    // Reorder the first task after the third task.
     const source = getRows()[0];
     const target = getRows()[2];
-    const dataTransfer = new DataTransfer();
-    const rect = target.getBoundingClientRect();
-    const clientY = rect.top + rect.height * 0.8;
-    source.querySelector('.drag-handle').dispatchEvent(
-      new DragEvent('dragstart', {
-        bubbles: true,
-        cancelable: true,
-        dataTransfer,
-        clientY: rect.top + 2,
-      }),
-    );
-    await new Promise((resolve) =>
-      requestAnimationFrame(() => requestAnimationFrame(resolve)),
-    );
+    const handle = source.querySelector('.drag-handle');
+    const handlePoint = center(handle);
+    const targetRect = target.getBoundingClientRect();
+    const dropX = targetRect.left + 24;
+    const dropY = targetRect.top + targetRect.height * 0.8;
+
+    fire(handle, 'pointerdown', handlePoint.x, handlePoint.y, 1);
+    fire(window, 'pointermove', handlePoint.x + 5, handlePoint.y + 5, 1);
+    await nextFrame();
     const dragging = source.classList.contains('is-dragging');
-    target.dispatchEvent(
-      new DragEvent('dragover', {
-        bubbles: true,
-        cancelable: true,
-        dataTransfer,
-        clientX: rect.left + 20,
-        clientY,
-      }),
-    );
+    const ghost = document.querySelector('.drag-ghost');
+    const ghostText = ghost?.textContent;
+    const bodyReordering = document.body.classList.contains('is-reordering');
+
+    fire(window, 'pointermove', dropX, dropY, 1);
+    await nextFrame();
     const dropHint = target.classList.contains('is-drop-after');
-    target.dispatchEvent(
-      new DragEvent('drop', {
-        bubbles: true,
-        cancelable: true,
-        dataTransfer,
-        clientX: rect.left + 20,
-        clientY,
-      }),
-    );
+
+    fire(window, 'pointerup', dropX, dropY, 0);
+    await nextFrame();
+
     return {
       before,
+      afterPress,
+      crossGhost,
+      crossHintCleared,
+      crossGhostCleared,
+      afterCross,
       dragging,
       dropHint,
+      ghostText,
+      bodyReordering,
+      ghostCleared: !document.querySelector('.drag-ghost'),
+      bodyCleared: !document.body.classList.contains('is-reordering'),
       after: getRows().map((row) => row.dataset.todoId),
+      focused: document.activeElement?.dataset?.todoId,
+      focusIsHandle: Boolean(document.activeElement?.classList?.contains('drag-handle')),
       hintsCleared: !document.querySelector(
         '.is-drop-before, .is-drop-after, .is-drop-end',
       ),
@@ -638,9 +704,29 @@ try {
   })()`);
   const draggedIds = dragOrder.before.map((item) => item.id);
   check(
+    "a press without movement does not reorder tasks",
+    JSON.stringify(dragOrder.afterPress) === JSON.stringify(draggedIds),
+    JSON.stringify(dragOrder.afterPress),
+  );
+  check(
+    "dragging outside the project is ignored",
+    dragOrder.crossGhost &&
+      dragOrder.crossHintCleared &&
+      dragOrder.crossGhostCleared &&
+      JSON.stringify(dragOrder.afterCross) === JSON.stringify(draggedIds),
+    JSON.stringify(dragOrder),
+  );
+  check(
     "dragging a task shows the grab and drop states",
-    dragOrder.dragging && dragOrder.dropHint,
-    JSON.stringify({ dragging: dragOrder.dragging, dropHint: dragOrder.dropHint }),
+    dragOrder.dragging &&
+      dragOrder.dropHint &&
+      dragOrder.bodyReordering &&
+      dragOrder.ghostText === dragOrder.before[0].title,
+    JSON.stringify({
+      dragging: dragOrder.dragging,
+      dropHint: dragOrder.dropHint,
+      ghostText: dragOrder.ghostText,
+    }),
   );
   check(
     "dropping a task moves it after the target",
@@ -650,8 +736,27 @@ try {
   );
   check(
     "drop indicators clear after reordering",
-    dragOrder.hintsCleared && dragOrder.draggingCleared,
+    dragOrder.hintsCleared &&
+      dragOrder.draggingCleared &&
+      dragOrder.ghostCleared &&
+      dragOrder.bodyCleared,
     JSON.stringify(dragOrder),
+  );
+  check(
+    "keyboard focus follows a dropped task",
+    dragOrder.focusIsHandle && dragOrder.focused === draggedIds[0],
+    JSON.stringify({ focused: dragOrder.focused, isHandle: dragOrder.focusIsHandle }),
+  );
+
+  const libSource = fs.readFileSync(path.join(root, "src-tauri/src/lib.rs"), "utf8");
+  const windowBuilder = libSource.slice(
+    libSource.indexOf("WebviewWindowBuilder::new"),
+    libSource.indexOf(".build()?"),
+  );
+  check(
+    "Tauri's native drag-drop handler stays disabled for webview input",
+    windowBuilder.includes(".disable_drag_drop_handler()"),
+    "src-tauri/src/lib.rs",
   );
 
   await sleep(700);
