@@ -96,6 +96,14 @@ standard macOS location; set `CHROME_PATH` to use another Chromium-based
 browser. Rust unit tests cover marker-based folder availability, backup
 validation, pruning, and the restore safety copy.
 
+## Security automation
+
+- **CodeQL** analyzes JavaScript/TypeScript and Rust on pushes to `main`, on pull
+  requests, and on demand from **Actions > CodeQL > Run workflow**.
+- **Dependabot** checks npm, Cargo, and GitHub Actions dependencies weekly. To run
+  a check manually, open **Insights > Dependency graph > Dependabot** and click
+  **Check for updates** next to the manifest you want to check.
+
 ## Where the data lives
 
 ```text
