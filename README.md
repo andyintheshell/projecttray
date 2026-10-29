@@ -13,8 +13,9 @@ fullscreen app — so the next actions are always one click away.
 - Menu bar-only app (no Dock icon), with a custom template tray icon.
 - Left-click the tray icon to show or hide the overlay. Right-click for
   **Open ProjectTray** and **Quit**.
-- Full-screen overlay that joins all macOS Spaces and uses a
-  `FullScreenAuxiliary` window so it can appear over fullscreen apps.
+- Full-screen overlay that moves to the active macOS Space when it opens and
+  uses a `FullScreenAuxiliary` window so it can appear over fullscreen apps,
+  including after sleep and wake.
 - The overlay sits one level above the Dock, so the Dock stays behind the UI
   instead of covering it. The menu bar stays reachable, so the tray icon can
   still toggle the overlay.
@@ -101,7 +102,10 @@ without a theme fall back to the macOS system appearance.
   behavior, overlay sizing, local persistence, and theme changes.
 - **AppKit bridge** — a small amount of Objective-C interop via `objc2-app-kit`
   to apply the `Accessory` activation policy before the window exists, set the
-  window just above the Dock, and opt into all Spaces and fullscreen auxiliaries.
+  window just above the Dock, and move the overlay onto the active Space before
+  ordering it front. `CanJoinAllSpaces` was not reliably honored for a hidden
+  window after macOS changed Spaces, so the overlay uses `MoveToActiveSpace`
+  plus `FullScreenAuxiliary` instead.
 - **Native vibrancy** — Tauri's `set_effects` applies the
   `UnderWindowBackground` material, so the blur is rendered by macOS and stays
   steady instead of being repainted by the WebView.

@@ -107,33 +107,30 @@ fn show_overlay(app: &AppHandle) {
     };
 
     fit_to_screen(app, &window);
-    let _ = window.show();
 
     #[cfg(target_os = "macos")]
-    configure_overlay(&window);
+    {
+        // Apply the collection behavior before ordering the window front.
+        // MoveToActiveSpace only takes effect when the window is ordered in.
+        configure_overlay(&window);
+        activate_application();
+    }
 
+    let _ = window.show();
     let _ = window.set_focus();
 
     #[cfg(target_os = "macos")]
     {
-        use objc2::runtime::NSObjectProtocol;
-        use objc2::{sel, MainThreadMarker};
-        use objc2_app_kit::{NSApplication, NSWindow};
+        use objc2_app_kit::NSWindow;
 
         if let Ok(pointer) = window.ns_window() {
             unsafe {
                 let ns_window = &*(pointer as *mut NSWindow);
-                if let Some(mtm) = MainThreadMarker::new() {
-                    let application = NSApplication::sharedApplication(mtm);
-                    application.unhide(None);
-                    if application.respondsToSelector(sel!(activate)) {
-                        application.activate();
-                    } else {
-                        #[allow(deprecated)]
-                        application.activateIgnoringOtherApps(true);
-                    }
-                }
                 ns_window.makeKeyAndOrderFront(None);
+                // A fullscreen app can still be the active application when
+                // the tray click arrives. Ordering front regardless makes the
+                // overlay visible before activation settles.
+                ns_window.orderFrontRegardless();
             }
         }
     }
@@ -141,15 +138,56 @@ fn show_overlay(app: &AppHandle) {
     let _ = app.emit("overlay-shown", ());
 }
 
+#[cfg(target_os = "macos")]
+fn activate_application() {
+    use objc2::runtime::NSObjectProtocol;
+    use objc2::{sel, MainThreadMarker};
+    use objc2_app_kit::NSApplication;
+
+    if let Some(mtm) = MainThreadMarker::new() {
+        let application = NSApplication::sharedApplication(mtm);
+        application.unhide(None);
+        if application.respondsToSelector(sel!(activate)) {
+            application.activate();
+        } else {
+            #[allow(deprecated)]
+            application.activateIgnoringOtherApps(true);
+        }
+    }
+}
+
+fn overlay_should_show(is_visible: bool, is_on_active_space: bool) -> bool {
+    !is_visible || !is_on_active_space
+}
+
+#[cfg(target_os = "macos")]
+fn overlay_is_on_active_space(window: &WebviewWindow) -> bool {
+    use objc2_app_kit::NSWindow;
+
+    if let Ok(pointer) = window.ns_window() {
+        unsafe {
+            let ns_window = &*(pointer as *mut NSWindow);
+            return ns_window.isOnActiveSpace();
+        }
+    }
+    true
+}
+
+#[cfg(not(target_os = "macos"))]
+fn overlay_is_on_active_space(_window: &WebviewWindow) -> bool {
+    true
+}
+
 fn toggle_overlay(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
 
-    if window.is_visible().unwrap_or(false) {
-        hide_overlay_window(app);
-    } else {
+    let is_visible = window.is_visible().unwrap_or(false);
+    if overlay_should_show(is_visible, overlay_is_on_active_space(&window)) {
         show_overlay(app);
+    } else {
+        hide_overlay_window(app);
     }
 }
 
@@ -165,8 +203,24 @@ fn apply_overlay_effects(window: &WebviewWindow) {
 }
 
 #[cfg(target_os = "macos")]
+fn overlay_collection_behavior() -> objc2_app_kit::NSWindowCollectionBehavior {
+    use objc2_app_kit::NSWindowCollectionBehavior;
+
+    // MoveToActiveSpace relocates the window to the Space that is active when
+    // it is ordered front. CanJoinAllSpaces is not reliably honored for a
+    // hidden window after macOS changes Spaces (notably after sleep/wake), and
+    // it is mutually exclusive with MoveToActiveSpace. FullScreenAuxiliary
+    // lets the overlay sit above a fullscreen app; Stationary keeps it out of
+    // Mission Control reordering; IgnoresCycle keeps it out of Cmd-` cycling.
+    NSWindowCollectionBehavior::MoveToActiveSpace
+        | NSWindowCollectionBehavior::Stationary
+        | NSWindowCollectionBehavior::FullScreenAuxiliary
+        | NSWindowCollectionBehavior::IgnoresCycle
+}
+
+#[cfg(target_os = "macos")]
 fn configure_overlay(window: &WebviewWindow) {
-    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior, NSWindowLevel};
+    use objc2_app_kit::{NSWindow, NSWindowLevel};
 
     // Dock windows use level 20 and the menu bar uses 24. Sitting just above
     // the Dock keeps it behind the overlay while leaving the tray icon
@@ -177,12 +231,7 @@ fn configure_overlay(window: &WebviewWindow) {
         unsafe {
             let ns_window = &*(pointer as *mut NSWindow);
             ns_window.setLevel(OVERLAY_LEVEL);
-            let behavior = ns_window.collectionBehavior()
-                | NSWindowCollectionBehavior::CanJoinAllSpaces
-                | NSWindowCollectionBehavior::Stationary
-                | NSWindowCollectionBehavior::FullScreenAuxiliary
-                | NSWindowCollectionBehavior::IgnoresCycle;
-            ns_window.setCollectionBehavior(behavior);
+            ns_window.setCollectionBehavior(overlay_collection_behavior());
             ns_window.setHidesOnDeactivate(false);
         }
     }
@@ -285,4 +334,32 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running ProjectTray");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::overlay_should_show;
+
+    #[test]
+    fn hidden_overlay_always_opens() {
+        assert!(overlay_should_show(false, true));
+        assert!(overlay_should_show(false, false));
+    }
+
+    #[test]
+    fn visible_overlay_hides_only_on_the_active_space() {
+        assert!(!overlay_should_show(true, true));
+        assert!(overlay_should_show(true, false));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn overlay_collection_behavior_moves_to_active_space() {
+        use objc2_app_kit::NSWindowCollectionBehavior;
+
+        let behavior = super::overlay_collection_behavior();
+        assert!(behavior.contains(NSWindowCollectionBehavior::MoveToActiveSpace));
+        assert!(behavior.contains(NSWindowCollectionBehavior::FullScreenAuxiliary));
+        assert!(!behavior.contains(NSWindowCollectionBehavior::CanJoinAllSpaces));
+    }
 }
